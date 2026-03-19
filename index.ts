@@ -14,11 +14,11 @@ let _viewerJs: string | null = null;
 
 interface Session {
   id: string;
-  source: "claude" | "codex";
+  source: "claude" | "codex" | "opencode";
   project: string;
   title: string;
   timestamp: Date;
-  path: string;
+  path: string; // file path for claude/codex, session ID for opencode
   messageCount: number;
 }
 
@@ -195,6 +195,102 @@ async function streamCodexSessions(onSession: OnSession) {
   await Promise.all(batch);
 }
 
+// ── OpenCode sessions (SQLite) ────────────────────────────────────
+
+function getOpencodeDbPath(): string {
+  const xdg = process.env.XDG_DATA_HOME || join(homedir(), ".local", "share");
+  return join(xdg, "opencode", "opencode.db");
+}
+
+async function streamOpencodeSessions(onSession: OnSession) {
+  const dbPath = getOpencodeDbPath();
+  if (!existsSync(dbPath)) return;
+
+  try {
+    const { Database } = await import("bun:sqlite");
+    const db = new Database(dbPath, { readonly: true });
+
+    const rows = db.query(`
+      SELECT s.id, s.title, s.directory, s.time_created, s.time_updated,
+             COUNT(m.id) as msg_count
+      FROM session s
+      LEFT JOIN message m ON m.session_id = s.id
+      GROUP BY s.id
+      HAVING msg_count >= 2
+      ORDER BY s.time_updated DESC
+    `).all() as any[];
+
+    for (const row of rows) {
+      const project = row.directory?.split("/").pop() || row.directory || "";
+      onSession({
+        id: row.id,
+        source: "opencode",
+        project,
+        title: row.title || "(untitled)",
+        timestamp: new Date(row.time_updated || row.time_created || 0),
+        path: row.id, // store session ID as path
+        messageCount: row.msg_count,
+      });
+    }
+
+    db.close();
+  } catch {}
+}
+
+async function parseOpencodeConversation(sessionId: string): Promise<Conversation> {
+  const { Database } = await import("bun:sqlite");
+  const db = new Database(getOpencodeDbPath(), { readonly: true });
+
+  const session = db.query(`SELECT * FROM session WHERE id = ?`).get(sessionId) as any;
+
+  const msgs = db.query(`
+    SELECT id, data, time_created FROM message
+    WHERE session_id = ? ORDER BY time_created
+  `).all(sessionId) as any[];
+
+  const partsQuery = db.query(`
+    SELECT data FROM part WHERE message_id = ? ORDER BY time_created
+  `);
+
+  const messages: Message[] = [];
+  let firstUserMsg = "";
+
+  for (const msg of msgs) {
+    const msgData = typeof msg.data === "string" ? JSON.parse(msg.data) : msg.data;
+    const role = msgData.role;
+    const ts = new Date(msg.time_created).toISOString();
+
+    const parts = partsQuery.all(msg.id) as any[];
+    for (const row of parts) {
+      let part: any;
+      try { part = typeof row.data === "string" ? JSON.parse(row.data) : row.data; } catch { continue; }
+
+      if (part.type === "text" && part.text?.trim()) {
+        if (role === "user" && !firstUserMsg) firstUserMsg = part.text.slice(0, 80);
+        messages.push({ role, content: part.text, timestamp: ts });
+      } else if (part.type === "tool") {
+        const toolName = part.tool || "tool";
+        const input = part.state?.input ? JSON.stringify(part.state.input, null, 2) : "";
+        const output = part.state?.output?.trim() || "";
+        let content = `[Tool: ${toolName}]`;
+        if (input) content += `\n${input}`;
+        if (output) content += `\n\n${output}`;
+        messages.push({ role: "assistant", content, timestamp: ts, toolName });
+      }
+    }
+  }
+
+  db.close();
+
+  return {
+    title: session?.title || firstUserMsg || "OpenCode Session",
+    source: "OpenCode",
+    project: session?.directory || "",
+    timestamp: session ? new Date(session.time_created).toISOString() : "",
+    messages,
+  };
+}
+
 async function walkJsonl(dir: string, cb: (path: string) => Promise<void>) {
   const entries = await readdir(dir, { withFileTypes: true });
   for (const e of entries) {
@@ -308,9 +404,9 @@ async function parseCodexConversation(path: string): Promise<Conversation> {
 }
 
 async function parseSession(session: Session): Promise<Conversation> {
-  return session.source === "claude"
-    ? parseClaudeConversation(session.path)
-    : parseCodexConversation(session.path);
+  if (session.source === "claude") return parseClaudeConversation(session.path);
+  if (session.source === "opencode") return parseOpencodeConversation(session.path);
+  return parseCodexConversation(session.path);
 }
 
 // ── HTML generation ──────────────────────────────────────────────────
@@ -383,8 +479,17 @@ interface ShareResult {
   key: string;        // base64url key
 }
 
+async function getSessionRaw(session: Session): Promise<string> {
+  if (session.source === "opencode") {
+    // Export opencode session as JSON for sharing
+    const conv = await parseOpencodeConversation(session.path);
+    return JSON.stringify(conv);
+  }
+  return await readFile(session.path, "utf-8");
+}
+
 async function generateShareUrl(session: Session): Promise<ShareResult> {
-  const raw = await readFile(session.path, "utf-8");
+  const raw = await getSessionRaw(session);
 
   // Compress → encrypt → upload to private gist
   const compressed = deflateRawSync(Buffer.from(raw), { level: 9 });
@@ -539,7 +644,7 @@ function render(state: TuiState) {
 
   // Column headers
   write(ansi.moveTo(2, 1));
-  const srcW = 7;
+  const srcW = 9;
   const projW = 14;
   const idW = 10;
   const msgW = 6;
@@ -562,7 +667,7 @@ function render(state: TuiState) {
     const idx = state.scroll + i;
     const selected = idx === state.cursor;
 
-    const srcColor = session.source === "claude" ? ansi.fg(141) : ansi.fg(71);
+    const srcColor = session.source === "claude" ? ansi.fg(141) : session.source === "opencode" ? ansi.fg(214) : ansi.fg(71);
     const project = session.project.split("/").pop() || session.project;
     const shortId = session.id.slice(0, 8);
     const date = session.timestamp.getTime() > 0
@@ -685,6 +790,7 @@ async function runTui() {
   Promise.all([
     streamClaudeSessions(onSession),
     streamCodexSessions(onSession),
+    streamOpencodeSessions(onSession),
   ]).then(() => {
     clearInterval(flushInterval);
     // Final flush

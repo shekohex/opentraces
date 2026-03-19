@@ -2,7 +2,7 @@
 
 # clanker-share
 
-terminal UI for browsing and sharing your Claude Code and Codex sessions.
+terminal UI for browsing and sharing your Claude Code, Codex, and OpenCode sessions.
 
 ```
 npx clanker-share
@@ -10,7 +10,7 @@ npx clanker-share
 
 ## what it does
 
-- finds all your local Claude Code and Codex sessions
+- finds all your local Claude Code, Codex, and OpenCode sessions
 - fuzzy search across everything
 - `s` to share — encrypts the session (AES-256-GCM) and uploads to a private GitHub gist
 - `o` to open in browser as a self-contained HTML viewer

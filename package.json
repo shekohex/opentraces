@@ -1,7 +1,7 @@
 {
   "name": "clanker-share",
-  "version": "0.1.0",
-  "description": "List and share Claude Code & Codex sessions with encrypted gist links",
+  "version": "0.2.0",
+  "description": "Browse, export & share Claude Code, Codex & OpenCode sessions",
   "module": "index.ts",
   "type": "module",
   "bin": {
@@ -20,6 +20,7 @@
   "keywords": [
     "claude",
     "codex",
+    "opencode",
     "session",
     "export",
     "share",

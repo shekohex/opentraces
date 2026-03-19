@@ -103,7 +103,7 @@
 <div class="state active landing-page" id="landing">
   <div class="landing-hero">
     <div class="landing-title">clanker-share</div>
-    <div class="landing-sub">browse, export & share your Claude Code and Codex sessions</div>
+    <div class="landing-sub">browse, export & share your Claude Code, Codex & OpenCode sessions</div>
     <div class="landing-install">
       <div class="landing-cmd" id="install-cmd" title="Click to copy">
         <span class="landing-copied" id="copy-toast">copied!</span>
@@ -131,7 +131,7 @@
       </div>
       <div class="landing-feat">
         <span class="landing-feat-icon">&bull;</span>
-        <span class="landing-feat-text"><strong>Claude Code + Codex</strong> session support</span>
+        <span class="landing-feat-text"><strong>Claude + Codex + OpenCode</strong> support</span>
       </div>
       <div class="landing-feat">
         <span class="landing-feat-icon">&bull;</span>
@@ -190,17 +190,30 @@ document.getElementById('install-cmd').addEventListener('click',function(){
     return;
   }
 
-  // Parse JSONL
+  // Try JSON (opencode) first, then JSONL (claude/codex)
   var messages = [];
   var meta = { source: '', title: '', project: '', timestamp: '', messages: [] };
-  var lines = raw.split('\n');
-  for (var i = 0; i < lines.length; i++) {
-    var line = lines[i].trim();
-    if (!line) continue;
-    var v;
-    try { v = JSON.parse(line); } catch(e) { continue; }
-    if (isClaudeFormat(v)) parseClaudeLine(v, messages, meta);
-    else if (isCodexFormat(v)) parseCodexLine(v, messages, meta);
+  var parsed = null;
+  try { parsed = JSON.parse(raw); } catch(e) {}
+
+  if (parsed && parsed.messages && Array.isArray(parsed.messages)) {
+    // Pre-parsed conversation format (opencode)
+    messages = parsed.messages;
+    meta.source = parsed.source || '';
+    meta.title = parsed.title || '';
+    meta.project = parsed.project || '';
+    meta.timestamp = parsed.timestamp || '';
+  } else {
+    // JSONL format (claude/codex)
+    var lines = raw.split('\n');
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      var v;
+      try { v = JSON.parse(line); } catch(e) { continue; }
+      if (isClaudeFormat(v)) parseClaudeLine(v, messages, meta);
+      else if (isCodexFormat(v)) parseCodexLine(v, messages, meta);
+    }
   }
 
   if (messages.length === 0) {
