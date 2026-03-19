@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>clanker-share — browse, export & share Claude Code sessions</title>
+<meta name="description" content="A terminal UI to browse, export, and share your Claude Code & Codex sessions. End-to-end encrypted sharing via GitHub gists.">
+
+<!-- Open Graph -->
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://share.clanker.monster">
+<meta property="og:title" content="clanker-share">
+<meta property="og:description" content="Browse, export & share your Claude Code sessions. Fuzzy search, encrypted sharing, vim keybindings.">
+<meta property="og:image" content="https://share.clanker.monster/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+
+<!-- Twitter -->
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="clanker-share">
+<meta name="twitter:description" content="Browse, export & share your Claude Code sessions. Fuzzy search, encrypted sharing, vim keybindings.">
+<meta name="twitter:image" content="https://share.clanker.monster/og.png">
+
+<style>
+@font-face{font-family:'Berkeley Mono';font-weight:400;font-style:normal;src:url('/BerkeleyMono-Regular.otf') format('opentype')}
+@font-face{font-family:'Berkeley Mono';font-weight:700;font-style:normal;src:url('/BerkeleyMono-Bold.otf') format('opentype')}
+
+/* States (site-specific) */
+.state{display:none;align-items:center;justify-content:center;min-height:100vh;text-align:center}
+.state.active{display:flex}
+.state h1{font-size:13px;font-weight:400;color:#555}
+.state p{font-size:11px;color:#333;margin-top:4px}
+.state.error p{color:#a55}
+.key-input{margin-top:12px;padding:4px 8px;font-size:12px;font-family:inherit;background:#1a1a1a;color:#ccc;border:1px solid #2a2a2a;border-radius:3px;width:300px;text-align:center}
+.key-input:focus{outline:none;border-color:#668}
+.key-input::placeholder{color:#444}
+.key-hint{font-size:10px;color:#333;margin-top:6px}
+#app{display:none}
+#app.active{display:flex}
+
+/* Landing page */
+.landing-page{flex-direction:column;gap:0;padding:0 24px}
+.landing-hero{max-width:640px}
+.landing-title{font-size:28px;font-weight:700;color:#eee;letter-spacing:-0.02em;margin-bottom:4px}
+.landing-sub{font-size:13px;color:#555;margin-top:8px;line-height:20px}
+.landing-install{margin-top:32px;display:flex;align-items:center;gap:8px;justify-content:center}
+.landing-cmd{
+  font-size:14px;
+  font-family:inherit;
+  background:#0a0a0a;
+  border:1px solid #2a2a2a;
+  border-radius:6px;
+  padding:12px 20px;
+  color:#c9a;
+  cursor:pointer;
+  transition:border-color 0.15s,color 0.15s;
+  position:relative;
+  user-select:all;
+}
+.landing-cmd:hover{border-color:#668;color:#dbb}
+.landing-cmd .prompt{color:#444;user-select:none}
+.landing-copied{
+  position:absolute;
+  top:-28px;
+  left:50%;
+  transform:translateX(-50%);
+  font-size:10px;
+  color:#6a9;
+  opacity:0;
+  transition:opacity 0.2s;
+  pointer-events:none;
+}
+.landing-copied.show{opacity:1}
+.landing-or{font-size:11px;color:#333;margin-top:8px}
+.landing-alt{font-size:12px;color:#555;margin-top:4px}
+.landing-alt code{background:#1a1a1a;padding:2px 6px;border-radius:3px;color:#888}
+.landing-features{
+  margin-top:48px;
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px 32px;
+  max-width:520px;
+  text-align:left;
+}
+.landing-feat{display:flex;gap:8px;align-items:baseline}
+.landing-feat-icon{color:#668;font-size:12px;flex-shrink:0}
+.landing-feat-text{font-size:11px;color:#666;line-height:16px}
+.landing-feat-text strong{color:#888;font-weight:600}
+.landing-footer{margin-top:64px;font-size:10px;color:#2a2a2a}
+.landing-footer a{color:#444;text-decoration:none}
+.landing-footer a:hover{color:#668}
+@media(max-width:500px){
+  .landing-title{font-size:22px}
+  .landing-features{grid-template-columns:1fr;gap:12px}
+  .landing-cmd{font-size:12px;padding:10px 16px}
+}
+
+{{CSS}}
+</style>
+</head>
+<body>
+
+<div class="state active landing-page" id="landing">
+  <div class="landing-hero">
+    <div class="landing-title">clanker-share</div>
+    <div class="landing-sub">browse, export & share your Claude Code and Codex sessions</div>
+    <div class="landing-install">
+      <div class="landing-cmd" id="install-cmd" title="Click to copy">
+        <span class="landing-copied" id="copy-toast">copied!</span>
+        <span class="prompt">$ </span>npx clanker-share
+      </div>
+    </div>
+    <div class="landing-or">or</div>
+    <div class="landing-alt"><code>bunx clanker-share</code></div>
+    <div class="landing-features">
+      <div class="landing-feat">
+        <span class="landing-feat-icon">&bull;</span>
+        <span class="landing-feat-text"><strong>fuzzy search</strong> across all sessions</span>
+      </div>
+      <div class="landing-feat">
+        <span class="landing-feat-icon">&bull;</span>
+        <span class="landing-feat-text"><strong>encrypted sharing</strong> via GitHub gists</span>
+      </div>
+      <div class="landing-feat">
+        <span class="landing-feat-icon">&bull;</span>
+        <span class="landing-feat-text"><strong>self-contained HTML</strong> export</span>
+      </div>
+      <div class="landing-feat">
+        <span class="landing-feat-icon">&bull;</span>
+        <span class="landing-feat-text"><strong>vim keybindings</strong> &mdash; j/k/g/G///</span>
+      </div>
+      <div class="landing-feat">
+        <span class="landing-feat-icon">&bull;</span>
+        <span class="landing-feat-text"><strong>Claude Code + Codex</strong> session support</span>
+      </div>
+      <div class="landing-feat">
+        <span class="landing-feat-icon">&bull;</span>
+        <span class="landing-feat-text"><strong>you control the key</strong> &mdash; E2E encrypted</span>
+      </div>
+    </div>
+    <div class="landing-footer">
+      <a href="https://github.com/sigkitten/clanker-share">github</a>
+    </div>
+  </div>
+</div>
+<script>
+document.getElementById('install-cmd').addEventListener('click',function(){
+  navigator.clipboard.writeText('npx clanker-share').then(function(){
+    var t=document.getElementById('copy-toast');t.classList.add('show');
+    setTimeout(function(){t.classList.remove('show')},1500);
+  });
+});
+</script>
+<div class="state" id="loading"><div><p>loading&hellip;</p></div></div>
+<div class="state error" id="error"><div><p>failed to load conversation</p></div></div>
+<div class="state" id="key-prompt"><div><h1>encrypted conversation</h1><p>paste the decryption key to view</p><input type="text" class="key-input" id="key-input" placeholder="key" autofocus><div class="key-hint">press enter to decrypt</div></div></div>
+
+{{SHELL}}
+
+<script>{{VIEWER_JS}}</script>
+<script>
+(async function(){
+  var hash = location.hash.slice(1);
+  if (!hash) return;
+
+  show('loading');
+
+  var dotIdx = hash.indexOf('.');
+  var gistId = dotIdx === -1 ? hash : hash.slice(0, dotIdx);
+  var keyB64 = dotIdx === -1 ? '' : hash.slice(dotIdx + 1);
+
+  if (!keyB64) {
+    show('key-prompt');
+    keyB64 = await new Promise(function(resolve) {
+      var input = document.getElementById('key-input');
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && input.value.trim()) resolve(input.value.trim());
+      });
+    });
+    show('loading');
+  }
+
+  var raw;
+  try {
+    raw = await fetchAndDecryptGist(gistId, keyB64);
+  } catch(e) {
+    console.error(e);
+    document.querySelector('#error p').textContent = e.message || 'failed to load conversation';
+    show('error');
+    return;
+  }
+
+  // Parse JSONL
+  var messages = [];
+  var meta = { source: '', title: '', project: '', timestamp: '', messages: [] };
+  var lines = raw.split('\n');
+  for (var i = 0; i < lines.length; i++) {
+    var line = lines[i].trim();
+    if (!line) continue;
+    var v;
+    try { v = JSON.parse(line); } catch(e) { continue; }
+    if (isClaudeFormat(v)) parseClaudeLine(v, messages, meta);
+    else if (isCodexFormat(v)) parseCodexLine(v, messages, meta);
+  }
+
+  if (messages.length === 0) {
+    document.querySelector('#error p').textContent = 'no messages found in conversation data';
+    show('error');
+    return;
+  }
+
+  show('app');
+  meta.messages = messages;
+  renderApp(meta, raw);
+
+  // ── Helpers ─────────────────────────────────────────────
+
+  function show(id) {
+    ['landing','loading','error','key-prompt'].forEach(function(s){ document.getElementById(s).classList.remove('active'); });
+    if (id === 'app') {
+      document.getElementById('app').classList.add('active');
+      if (window.innerWidth <= 900) document.getElementById('hamburger').style.display = 'block';
+    } else {
+      document.getElementById(id).classList.add('active');
+    }
+  }
+
+  async function fetchAndDecryptGist(gistId, keyB64) {
+    var resp = await fetch('https://api.github.com/gists/' + gistId);
+    if (resp.status === 403) throw new Error('GitHub API rate limit — try again in a few minutes');
+    if (resp.status === 404) throw new Error('gist not found — it may have been deleted');
+    if (!resp.ok) throw new Error('gist fetch failed: ' + resp.status);
+    var gist = await resp.json();
+    var files = Object.values(gist.files);
+    if (!files.length) throw new Error('empty gist');
+    var rawUrl = files[0].raw_url;
+    var rawResp = await fetch(rawUrl);
+    if (!rawResp.ok) throw new Error('gist raw fetch failed: ' + rawResp.status);
+    var b64content = await rawResp.text();
+    var packed = Uint8Array.from(atob(b64content.trim()), function(c){ return c.charCodeAt(0); });
+
+    var iv = packed.slice(0, 12);
+    var payload = packed.slice(12);
+
+    var keyBytes = Uint8Array.from(atob(keyB64.replace(/-/g, '+').replace(/_/g, '/')), function(c){ return c.charCodeAt(0); });
+    var aesKey = await crypto.subtle.digest('SHA-256', keyBytes);
+    var cryptoKey = await crypto.subtle.importKey('raw', aesKey, { name: 'AES-GCM' }, false, ['decrypt']);
+    var decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, cryptoKey, payload);
+
+    var ds = new DecompressionStream('deflate-raw');
+    var writer = ds.writable.getWriter();
+    writer.write(new Uint8Array(decrypted));
+    writer.close();
+    var reader = ds.readable.getReader();
+    var chunks = [];
+    while (true) { var r = await reader.read(); if (r.done) break; chunks.push(r.value); }
+    var total = chunks.reduce(function(a, c){ return a + c.length; }, 0);
+    var result = new Uint8Array(total);
+    var off = 0;
+    for (var i = 0; i < chunks.length; i++) { result.set(chunks[i], off); off += chunks[i].length; }
+    return new TextDecoder().decode(result);
+  }
+
+  function isClaudeFormat(v) {
+    return v.type === 'user' || v.type === 'assistant' || v.type === 'system' ||
+           v.type === 'progress' || v.type === 'file-history-snapshot' ||
+           v.type === 'queue-operation' || v.type === 'last-prompt';
+  }
+
+  function isCodexFormat(v) {
+    return v.type === 'session_meta' || v.type === 'response_item' ||
+           v.type === 'event_msg' || v.type === 'turn_context';
+  }
+
+  function parseClaudeLine(v, msgs, meta) {
+    if (!meta.timestamp && v.timestamp) meta.timestamp = v.timestamp;
+    if (!meta.project && v.cwd) meta.project = v.cwd;
+    if (!meta.source) meta.source = 'Claude Code';
+    var ts = v.timestamp || '';
+    if (v.type === 'user') {
+      var text = extractContent(v.message && v.message.content);
+      if (!meta.title && text) meta.title = text.slice(0, 80);
+      if (text.trim()) msgs.push({ role: 'user', content: text, timestamp: ts });
+    } else if (v.type === 'assistant' && v.message && Array.isArray(v.message.content)) {
+      for (var j = 0; j < v.message.content.length; j++) {
+        var item = v.message.content[j];
+        if (item.type === 'text' && item.text && item.text.trim()) {
+          msgs.push({ role: 'assistant', content: item.text, timestamp: ts });
+        } else if (item.type === 'tool_use') {
+          msgs.push({ role: 'assistant', content: '[Tool: ' + (item.name||'tool') + ']\n' + JSON.stringify(item.input, null, 2), timestamp: ts, toolName: item.name });
+        }
+      }
+    }
+  }
+
+  function parseCodexLine(v, msgs, meta) {
+    var ts = v.timestamp || '';
+    if (!meta.timestamp && ts) meta.timestamp = ts;
+    if (!meta.source) meta.source = 'Codex';
+    if (v.type === 'session_meta' && v.payload) { if (v.payload.cwd) meta.project = v.payload.cwd; }
+    if (v.type === 'response_item' && v.payload) {
+      var role = v.payload.role;
+      var items = v.payload.content;
+      if (!Array.isArray(items)) return;
+      for (var j = 0; j < items.length; j++) {
+        var item = items[j];
+        if (item.type === 'input_text' && role === 'user') {
+          var text = item.text || '';
+          if (text.indexOf('<permissions instructions>') !== -1 || text.indexOf('<instructions>') !== -1) continue;
+          if (!text.trim()) continue;
+          if (!meta.title) meta.title = text.slice(0, 80);
+          msgs.push({ role: 'user', content: text, timestamp: ts });
+        } else if (item.type === 'output_text' && role === 'assistant') {
+          if (item.text && item.text.trim()) msgs.push({ role: 'assistant', content: item.text, timestamp: ts });
+        }
+      }
+    }
+  }
+
+  function extractContent(content) {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      var parts = [];
+      for (var i = 0; i < content.length; i++) {
+        if (content[i].type === 'text' && content[i].text) parts.push(content[i].text);
+      }
+      return parts.join('\n');
+    }
+    return '';
+  }
+})();
+</script>
+</body>
+</html>

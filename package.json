@@ -1,0 +1,34 @@
+{
+  "name": "clanker-share",
+  "version": "0.1.0",
+  "description": "List and share Claude Code & Codex sessions with encrypted gist links",
+  "module": "index.ts",
+  "type": "module",
+  "bin": {
+    "clanker-share": "./bin.mjs"
+  },
+  "files": [
+    "bin.mjs",
+    "index.ts",
+    "viewer.js",
+    "viewer.css"
+  ],
+  "scripts": {
+    "build:site": "bun run build-site.ts",
+    "deploy": "bun run build:site && bunx wrangler pages deploy site --project-name clanker-share --commit-dirty=true"
+  },
+  "keywords": [
+    "claude",
+    "codex",
+    "session",
+    "export",
+    "share",
+    "tui"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/bun": "latest",
+    "puppeteer": "^24.40.0"
+  }
+}
