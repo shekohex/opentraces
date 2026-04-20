@@ -1,10 +1,10 @@
-#!/usr/bin/env bun
 // Generate OG image by screenshotting the landing page at 1200x630
-import { writeFileSync, mkdirSync, readFileSync } from "fs";
-import { join } from "path";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import puppeteer from "puppeteer";
 
-const dir = import.meta.dir;
+const dir = dirname(fileURLToPath(import.meta.url));
 mkdirSync(join(dir, "site"), { recursive: true });
 
 const htmlPath = join(dir, "site", "index.html");

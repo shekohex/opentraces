@@ -1,10 +1,15 @@
-#!/usr/bin/env bun
-import { homedir, tmpdir } from "os";
-import { join } from "path";
-import { readdir, readFile, unlink } from "fs/promises";
-import { existsSync, readFileSync } from "fs";
-import { deflateRawSync } from "zlib";
-import { createCipheriv, randomBytes, createHash } from "crypto";
+#!/usr/bin/env node
+import { homedir, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { spawn } from "node:child_process";
+import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { existsSync, readFileSync } from "node:fs";
+import { deflateRawSync } from "node:zlib";
+import { createCipheriv, randomBytes, createHash } from "node:crypto";
+import { getPublicBaseUrl } from "./public-url.js";
+
+const moduleDir = dirname(fileURLToPath(import.meta.url));
 
 // Cache static assets (read once, never change)
 let _viewerCss: string | null = null;
@@ -207,10 +212,10 @@ async function streamOpencodeSessions(onSession: OnSession) {
   if (!existsSync(dbPath)) return;
 
   try {
-    const { Database } = await import("bun:sqlite");
-    const db = new Database(dbPath, { readonly: true });
+    const { DatabaseSync } = await import("node:sqlite");
+    const db = new DatabaseSync(dbPath, { readOnly: true });
 
-    const rows = db.query(`
+    const rows = db.prepare(`
       SELECT s.id, s.title, s.directory, s.time_created, s.time_updated,
              COUNT(m.id) as msg_count
       FROM session s
@@ -238,17 +243,17 @@ async function streamOpencodeSessions(onSession: OnSession) {
 }
 
 async function parseOpencodeConversation(sessionId: string): Promise<Conversation> {
-  const { Database } = await import("bun:sqlite");
-  const db = new Database(getOpencodeDbPath(), { readonly: true });
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(getOpencodeDbPath(), { readOnly: true });
 
-  const session = db.query(`SELECT * FROM session WHERE id = ?`).get(sessionId) as any;
+  const session = db.prepare(`SELECT * FROM session WHERE id = ?`).get(sessionId) as any;
 
-  const msgs = db.query(`
+  const msgs = db.prepare(`
     SELECT id, data, time_created FROM message
     WHERE session_id = ? ORDER BY time_created
   `).all(sessionId) as any[];
 
-  const partsQuery = db.query(`
+  const partsQuery = db.prepare(`
     SELECT data FROM part WHERE message_id = ? ORDER BY time_created
   `);
 
@@ -462,11 +467,41 @@ function getAppShell(): string {
 }
 
 function getViewerCss(): string {
-  return (_viewerCss ??= readFileSync(join(import.meta.dir, "viewer.css"), "utf-8"));
+  return (_viewerCss ??= readFileSync(join(moduleDir, "viewer.css"), "utf-8"));
 }
 
 function getViewerScript(): string {
-  return (_viewerJs ??= readFileSync(join(import.meta.dir, "viewer.js"), "utf-8"));
+  return (_viewerJs ??= readFileSync(join(moduleDir, "viewer.js"), "utf-8"));
+}
+
+interface CommandResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+function runCommand(command: string, args: string[], input?: string): Promise<CommandResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => { stdout += chunk; });
+    child.stderr.on("data", (chunk) => { stderr += chunk; });
+
+    child.on("error", reject);
+    child.on("close", (exitCode) => {
+      resolve({ stdout, stderr, exitCode: exitCode ?? 0 });
+    });
+
+    if (input !== undefined) {
+      child.stdin.end(input);
+    } else {
+      child.stdin.end();
+    }
+  });
 }
 
 // ── Share (encrypted gist) ───────────────────────────────────────────
@@ -474,9 +509,9 @@ function getViewerScript(): string {
 const shareCache = new Map<string, ShareResult>();
 
 interface ShareResult {
-  publicUrl: string;  // opentraces.pages.dev/#<gist-id> (needs key separately)
-  privateUrl: string; // opentraces.pages.dev/#<gist-id>.<key>
-  key: string;        // base64url key
+  publicUrl: string;
+  privateUrl: string;
+  key: string;
 }
 
 async function getSessionRaw(session: Session): Promise<string> {
@@ -507,19 +542,13 @@ async function generateShareUrl(session: Session): Promise<ShareResult> {
 
   // Upload to GitHub gist
   const tmpFile = join(tmpdir(), `opentraces-${Date.now()}.bin`);
-  await Bun.write(tmpFile, packed.toString("base64"));
+  await writeFile(tmpFile, packed.toString("base64"));
 
-  const proc = Bun.spawn(["gh", "gist", "create", "--public=false", tmpFile], {
-    stdout: "pipe",
-    stderr: "pipe",
-  });
-  const stdout = await new Response(proc.stdout).text();
-  const stderr = await new Response(proc.stderr).text();
-  await proc.exited;
+  const { stdout, stderr, exitCode } = await runCommand("gh", ["gist", "create", "--public=false", tmpFile]);
 
   try { await unlink(tmpFile); } catch {}
 
-  if (proc.exitCode !== 0) {
+  if (exitCode !== 0) {
     throw new Error(`gh gist create failed: ${stderr.trim()}`);
   }
 
@@ -528,7 +557,7 @@ async function generateShareUrl(session: Session): Promise<ShareResult> {
   if (!gistId) throw new Error(`couldn't parse gist ID from: ${gistUrl}`);
 
   const keyB64 = key.toString("base64url");
-  const base = `https://opentraces.pages.dev/#${gistId}`;
+  const base = `${getPublicBaseUrl()}/#${gistId}`;
 
   return {
     publicUrl: base,
@@ -730,18 +759,34 @@ function setStatus(state: TuiState, msg: string, ms = 3000) {
 
 async function copyToClipboard(text: string): Promise<boolean> {
   try {
-    const proc = Bun.spawn(["pbcopy"], { stdin: "pipe" });
-    proc.stdin.write(text);
-    proc.stdin.end();
-    await proc.exited;
-    return true;
+    const commands: Array<[string, string[]]> = process.platform === "win32"
+      ? [["clip", []]]
+      : process.platform === "darwin"
+        ? [["pbcopy", []]]
+        : [["wl-copy", []], ["xclip", ["-selection", "clipboard"]], ["xsel", ["--clipboard", "--input"]]];
+
+    for (const [command, args] of commands) {
+      try {
+        await runCommand(command, args, text);
+        return true;
+      } catch {}
+    }
+
+    return false;
   } catch {
     return false;
   }
 }
 
 async function openInBrowser(path: string) {
-  Bun.spawn(["open", path]);
+  const command = process.platform === "darwin"
+    ? "open"
+    : process.platform === "win32"
+      ? "cmd"
+      : "xdg-open";
+  const args = process.platform === "win32" ? ["/c", "start", "", path] : [path];
+  const child = spawn(command, args, { stdio: "ignore", detached: true });
+  child.unref();
 }
 
 async function runTui() {
@@ -924,7 +969,7 @@ async function runTui() {
           tmpdir(),
           `opentraces-${session.id.slice(0, 8)}.html`
         );
-        await Bun.write(tmp, html);
+        await writeFile(tmp, html);
         await openInBrowser(tmp);
         setStatus(state, `opened ${tmp}`);
       } catch (e: any) {
@@ -939,7 +984,7 @@ async function runTui() {
         const conv = await parseSession(session);
         const html = generateHtml(conv);
         const outPath = `${session.id.slice(0, 8)}.html`;
-        await Bun.write(outPath, html);
+        await writeFile(outPath, html);
         setStatus(state, `saved ${outPath}`);
       } catch (e: any) {
         setStatus(state, `error: ${e.message}`);

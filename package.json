@@ -9,13 +9,26 @@
   },
   "files": [
     "bin.mjs",
+    "public-url.js",
+    "server.mjs",
+    "build-site.ts",
+    "generate-og.ts",
     "index.ts",
+    "site-template.html",
     "viewer.js",
-    "viewer.css"
+    "viewer.css",
+    "site"
   ],
   "scripts": {
-    "build:site": "bun run build-site.ts",
-    "deploy": "bun run build:site && bunx wrangler pages deploy site --project-name opentraces --commit-dirty=true"
+    "build": "tsc -p tsconfig.json && npm run build:site",
+    "build:site": "tsx build-site.ts",
+    "dev": "tsx watch server.mjs",
+    "dev:cli": "tsx watch index.ts",
+    "dev:site": "tsx watch build-site.ts",
+    "prepack": "npm run build",
+    "serve": "node server.mjs",
+    "start": "node server.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "keywords": [
     "claude",
@@ -27,9 +40,15 @@
     "tui"
   ],
   "license": "MIT",
+  "dependencies": {
+    "@hono/node-server": "^1.19.14",
+    "hono": "^4.12.14",
+    "tsx": "^4.20.5"
+  },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
-    "@types/bun": "latest",
-    "puppeteer": "^24.40.0"
+    "@types/node": "^24.0.0",
+    "puppeteer": "^24.40.0",
+    "typescript": "^5.9.3"
   }
 }

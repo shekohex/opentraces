@@ -1,13 +1,16 @@
-#!/usr/bin/env bun
 // Build site/index.html from template + shared viewer.css/viewer.js
-import { readFileSync, writeFileSync, mkdirSync } from "fs";
-import { join } from "path";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { getPublicBaseUrl, getPublicHost } from "./public-url.js";
 
-const dir = import.meta.dir;
+const dir = dirname(fileURLToPath(import.meta.url));
 
 const template = readFileSync(join(dir, "site-template.html"), "utf-8");
 const css = readFileSync(join(dir, "viewer.css"), "utf-8");
 const js = readFileSync(join(dir, "viewer.js"), "utf-8");
+const publicBaseUrl = getPublicBaseUrl();
+const publicHost = getPublicHost(publicBaseUrl);
 
 // Build the app shell (same as getAppShell() in index.ts)
 const shell = `<button id="hamburger" title="Open sidebar">&#9776;</button>
@@ -32,11 +35,13 @@ const shell = `<button id="hamburger" title="Open sidebar">&#9776;</button>
   <main id="content">
     <div class="page-header" id="page-header"></div>
     <div class="thread" id="thread"></div>
-    <footer>opentraces.pages.dev</footer>
+    <footer>${publicHost}</footer>
   </main>
 </div>`;
 
 const output = template
+  .replaceAll("{{PUBLIC_URL}}", publicBaseUrl)
+  .replaceAll("{{PUBLIC_HOST}}", publicHost)
   .replace("{{CSS}}", css)
   .replace("{{SHELL}}", shell)
   .replace("{{VIEWER_JS}}", js);
@@ -45,10 +50,8 @@ mkdirSync(join(dir, "site"), { recursive: true });
 writeFileSync(join(dir, "site", "index.html"), output);
 console.log("built site/index.html (" + output.length + " bytes)");
 
-// Generate OG image if resvg is available
 try {
-  const { execSync } = await import("child_process");
-  execSync("bun run generate-og.ts", { cwd: dir, stdio: "inherit" });
+  await import("./generate-og.ts");
 } catch {
   console.log("skipped og image generation");
 }
