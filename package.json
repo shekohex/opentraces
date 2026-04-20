@@ -9,6 +9,7 @@
   },
   "files": [
     "bin.mjs",
+    "public",
     "public-url.js",
     "server.mjs",
     "build-site.ts",
@@ -22,6 +23,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && npm run build:site",
     "build:site": "tsx build-site.ts",
+    "vendor:font": "node scripts/vendor-nerd-font.mjs",
     "dev": "tsx watch server.mjs",
     "dev:cli": "tsx watch index.ts",
     "dev:site": "tsx watch build-site.ts",
