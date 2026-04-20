@@ -1,16 +1,23 @@
 // Build site/index.html from template + shared viewer.css/viewer.js
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getPublicBaseUrl, getPublicHost } from "./public-url.js";
 
 const dir = dirname(fileURLToPath(import.meta.url));
+const publicDir = join(dir, "public");
 
 const template = readFileSync(join(dir, "site-template.html"), "utf-8");
 const css = readFileSync(join(dir, "viewer.css"), "utf-8");
 const js = readFileSync(join(dir, "viewer.js"), "utf-8");
 const publicBaseUrl = getPublicBaseUrl();
 const publicHost = getPublicHost(publicBaseUrl);
+const defaultViewerConfig = {
+  userLabel: "user",
+  userAvatarUrl: "",
+  assistantFallbackLabel: "assistant",
+  githubUsername: "",
+};
 
 // Build the app shell (same as getAppShell() in index.ts)
 const shell = `<button id="hamburger" title="Open sidebar">&#9776;</button>
@@ -42,11 +49,15 @@ const shell = `<button id="hamburger" title="Open sidebar">&#9776;</button>
 const output = template
   .replaceAll("{{PUBLIC_URL}}", publicBaseUrl)
   .replaceAll("{{PUBLIC_HOST}}", publicHost)
+  .replaceAll("{{VIEWER_CONFIG_JSON}}", JSON.stringify(defaultViewerConfig))
   .replace("{{CSS}}", css)
   .replace("{{SHELL}}", shell)
   .replace("{{VIEWER_JS}}", js);
 
 mkdirSync(join(dir, "site"), { recursive: true });
+if (existsSync(publicDir)) {
+  cpSync(publicDir, join(dir, "site"), { recursive: true, force: true });
+}
 writeFileSync(join(dir, "site", "index.html"), output);
 console.log("built site/index.html (" + output.length + " bytes)");
 

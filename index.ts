@@ -3,10 +3,10 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
-import { readdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { deflateRawSync } from "node:zlib";
-import { createCipheriv, randomBytes, createHash } from "node:crypto";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { getPublicBaseUrl } from "./public-url.js";
 
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -14,6 +14,10 @@ const moduleDir = dirname(fileURLToPath(import.meta.url));
 // Cache static assets (read once, never change)
 let _viewerCss: string | null = null;
 let _viewerJs: string | null = null;
+let _viewerConfig: ViewerConfig | null = null;
+
+const opentracesDir = join(homedir(), ".opentraces");
+const viewerConfigPath = join(opentracesDir, "config.json");
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -32,6 +36,7 @@ interface Message {
   content: string;
   timestamp: string;
   toolName?: string;
+  modelId?: string;
 }
 
 interface Conversation {
@@ -39,7 +44,15 @@ interface Conversation {
   source: string;
   project: string;
   timestamp: string;
+  modelId?: string;
   messages: Message[];
+}
+
+interface ViewerConfig {
+  userLabel: string;
+  userAvatarUrl: string;
+  assistantFallbackLabel: string;
+  githubUsername: string;
 }
 
 function extractProjectName(dirName: string): string {
@@ -89,6 +102,91 @@ function extractTextFromBlocks(content: any): string {
       .join("\n");
   }
   return "";
+}
+
+function normalizeModelId(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.trim();
+}
+
+function firstString(...values: unknown[]): string {
+  for (const value of values) {
+    const normalized = normalizeModelId(value);
+    if (normalized) return normalized;
+  }
+  return "";
+}
+
+function readModelId(value: any): string {
+  if (!value || typeof value !== "object") return "";
+
+  const direct = firstString(
+    value.modelId,
+    value.model_id,
+    value.model,
+    value.assistantModel,
+    value.assistant_model,
+    value.responseModel,
+    value.response_model,
+  );
+  if (direct) return direct;
+
+  const nested = firstString(
+    value.model?.id,
+    value.model?.name,
+    value.model_info?.id,
+    value.model_info?.name,
+    value.payload?.model,
+    value.payload?.model_id,
+    value.payload?.modelId,
+    value.payload?.model?.id,
+    value.payload?.model?.name,
+    value.message?.model,
+    value.message?.model_id,
+    value.message?.modelId,
+  );
+  return nested;
+}
+
+function getConversationModel(messages: Message[]): string {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message) continue;
+    if (message.role === "assistant" && message.modelId) return message.modelId;
+  }
+  return "";
+}
+
+function getDefaultViewerConfig(): ViewerConfig {
+  return {
+    userLabel: "user",
+    userAvatarUrl: "",
+    assistantFallbackLabel: "assistant",
+    githubUsername: "",
+  };
+}
+
+async function loadViewerConfig(): Promise<ViewerConfig> {
+  if (_viewerConfig) return _viewerConfig;
+
+  const defaults = getDefaultViewerConfig();
+
+  try {
+    const raw = await readFile(viewerConfigPath, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<ViewerConfig>;
+    _viewerConfig = {
+      userLabel: typeof parsed.userLabel === "string" && parsed.userLabel.trim() ? parsed.userLabel.trim().slice(0, 80) : defaults.userLabel,
+      userAvatarUrl: typeof parsed.userAvatarUrl === "string" ? parsed.userAvatarUrl.trim().slice(0, 500) : defaults.userAvatarUrl,
+      assistantFallbackLabel: typeof parsed.assistantFallbackLabel === "string" && parsed.assistantFallbackLabel.trim()
+        ? parsed.assistantFallbackLabel.trim().slice(0, 80)
+        : defaults.assistantFallbackLabel,
+      githubUsername: typeof parsed.githubUsername === "string" ? parsed.githubUsername.trim().replace(/^@/, "").slice(0, 80) : defaults.githubUsername,
+    };
+    return _viewerConfig;
+  } catch {
+    _viewerConfig = defaults;
+    return _viewerConfig;
+  }
 }
 
 function parsePiSessionFile(content: string): { header: PiSessionHeader | null; entries: PiSessionEntry[] } {
@@ -144,6 +242,7 @@ function getPiSessionName(pathEntries: PiSessionEntry[]): string {
 function convertPiEntriesToMessages(pathEntries: PiSessionEntry[]): { messages: Message[]; firstUserMsg: string } {
   const messages: Message[] = [];
   let firstUserMsg = "";
+  let currentModelId = "";
 
   const pushUser = (text: string, ts: string) => {
     const trimmed = text.trim();
@@ -152,19 +251,34 @@ function convertPiEntriesToMessages(pathEntries: PiSessionEntry[]): { messages: 
     messages.push({ role: "user", content: trimmed, timestamp: ts });
   };
 
-  const pushAssistant = (text: string, ts: string, toolName?: string) => {
+  const pushAssistant = (text: string, ts: string, toolName?: string, modelId?: string) => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    if (toolName) messages.push({ role: "assistant", content: trimmed, timestamp: ts, toolName });
-    else messages.push({ role: "assistant", content: trimmed, timestamp: ts });
+    const resolvedModelId = firstString(modelId, currentModelId);
+    if (toolName) messages.push({ role: "assistant", content: trimmed, timestamp: ts, toolName, modelId: resolvedModelId || undefined });
+    else messages.push({ role: "assistant", content: trimmed, timestamp: ts, modelId: resolvedModelId || undefined });
   };
 
   for (const entry of pathEntries) {
     const ts = typeof entry.timestamp === "string" ? entry.timestamp : "";
 
+    if (entry.type === "model_change") {
+      currentModelId = firstString(
+        entry.modelId,
+        entry.model_id,
+        entry.model,
+        entry.to,
+        entry.value,
+        entry.next,
+      ) || currentModelId;
+      continue;
+    }
+
     if (entry.type === "message" && entry.message) {
       const msg = entry.message;
       const role = msg.role;
+      const messageModelId = firstString(readModelId(entry), readModelId(msg), currentModelId);
+      if (messageModelId) currentModelId = messageModelId;
 
       if (role === "user") {
         pushUser(extractTextFromBlocks(msg.content), ts);
@@ -177,15 +291,15 @@ function convertPiEntriesToMessages(pathEntries: PiSessionEntry[]): { messages: 
           for (const block of content) {
             if (!block) continue;
             if (block.type === "text" && typeof block.text === "string") {
-              pushAssistant(block.text, ts);
+              pushAssistant(block.text, ts, undefined, messageModelId);
             } else if (block.type === "toolCall") {
               const name = typeof block.name === "string" ? block.name : "tool";
               const argsText = block.arguments !== undefined ? `\n${JSON.stringify(block.arguments, null, 2)}` : "";
-              pushAssistant(`[Tool: ${name}]${argsText}`, ts, name);
+              pushAssistant(`[Tool: ${name}]${argsText}`, ts, name, messageModelId);
             }
           }
         } else {
-          pushAssistant(extractTextFromBlocks(content), ts);
+          pushAssistant(extractTextFromBlocks(content), ts, undefined, messageModelId);
         }
         continue;
       }
@@ -193,7 +307,7 @@ function convertPiEntriesToMessages(pathEntries: PiSessionEntry[]): { messages: 
       if (role === "toolResult") {
         const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
         const text = extractTextFromBlocks(msg.content) || "(no output)";
-        pushAssistant(text, ts, toolName);
+        pushAssistant(text, ts, toolName, messageModelId);
         continue;
       }
 
@@ -201,13 +315,13 @@ function convertPiEntriesToMessages(pathEntries: PiSessionEntry[]): { messages: 
         const command = typeof msg.command === "string" ? msg.command : "bash";
         const output = typeof msg.output === "string" ? msg.output : "";
         const body = output.trim() ? `Ran \`${command}\`\n\n${output}` : `Ran \`${command}\``;
-        pushAssistant(body, ts, "bash");
+        pushAssistant(body, ts, "bash", messageModelId);
         continue;
       }
 
       if (role === "custom") {
         const customType = typeof msg.customType === "string" ? msg.customType : "custom";
-        pushAssistant(extractTextFromBlocks(msg.content), ts, customType);
+        pushAssistant(extractTextFromBlocks(msg.content), ts, customType, messageModelId);
         continue;
       }
 
@@ -486,10 +600,13 @@ async function parseOpencodeConversation(sessionId: string): Promise<Conversatio
 
   const messages: Message[] = [];
   let firstUserMsg = "";
+  let currentModelId = "";
 
   for (const msg of msgs) {
     const msgData = typeof msg.data === "string" ? JSON.parse(msg.data) : msg.data;
     const role = msgData.role;
+    const messageModelId = firstString(readModelId(msgData), currentModelId);
+    if (messageModelId) currentModelId = messageModelId;
     const ts = new Date(msg.time_created).toISOString();
 
     const parts = partsQuery.all(msg.id) as any[];
@@ -499,7 +616,13 @@ async function parseOpencodeConversation(sessionId: string): Promise<Conversatio
 
       if (part.type === "text" && part.text?.trim()) {
         if (role === "user" && !firstUserMsg) firstUserMsg = part.text.slice(0, 80);
-        messages.push({ role, content: part.text, timestamp: ts });
+        if (role === "assistant") {
+          const partModelId = firstString(readModelId(part), messageModelId);
+          if (partModelId) currentModelId = partModelId;
+          messages.push({ role, content: part.text, timestamp: ts, modelId: partModelId || undefined });
+        } else {
+          messages.push({ role, content: part.text, timestamp: ts });
+        }
       } else if (part.type === "tool") {
         const toolName = part.tool || "tool";
         const input = part.state?.input ? JSON.stringify(part.state.input, null, 2) : "";
@@ -507,7 +630,9 @@ async function parseOpencodeConversation(sessionId: string): Promise<Conversatio
         let content = `[Tool: ${toolName}]`;
         if (input) content += `\n${input}`;
         if (output) content += `\n\n${output}`;
-        messages.push({ role: "assistant", content, timestamp: ts, toolName });
+        const partModelId = firstString(readModelId(part), messageModelId, currentModelId);
+        if (partModelId) currentModelId = partModelId;
+        messages.push({ role: "assistant", content, timestamp: ts, toolName, modelId: partModelId || undefined });
       }
     }
   }
@@ -519,6 +644,7 @@ async function parseOpencodeConversation(sessionId: string): Promise<Conversatio
     source: "OpenCode",
     project: session?.directory || "",
     timestamp: session ? new Date(session.time_created).toISOString() : "",
+    modelId: getConversationModel(messages) || undefined,
     messages,
   };
 }
@@ -540,6 +666,7 @@ async function parseClaudeConversation(path: string): Promise<Conversation> {
   let firstUserMsg = "";
   let sessionTs = "";
   let project = "";
+  let currentModelId = "";
 
   for (const line of content.split("\n").filter(Boolean)) {
     let v: any;
@@ -547,6 +674,8 @@ async function parseClaudeConversation(path: string): Promise<Conversation> {
 
     if (!sessionTs && v.timestamp) sessionTs = v.timestamp;
     if (!project && v.cwd) project = v.cwd;
+    const eventModel = readModelId(v);
+    if (eventModel) currentModelId = eventModel;
 
     const ts = v.timestamp || "";
 
@@ -557,13 +686,18 @@ async function parseClaudeConversation(path: string): Promise<Conversation> {
     } else if (v.type === "assistant" && Array.isArray(v.message?.content)) {
       for (const item of v.message.content) {
         if (item.type === "text" && item.text?.trim()) {
-          messages.push({ role: "assistant", content: item.text, timestamp: ts });
+          const itemModel = firstString(readModelId(item), currentModelId);
+          if (itemModel) currentModelId = itemModel;
+          messages.push({ role: "assistant", content: item.text, timestamp: ts, modelId: itemModel || undefined });
         } else if (item.type === "tool_use") {
+          const itemModel = firstString(readModelId(item), currentModelId);
+          if (itemModel) currentModelId = itemModel;
           messages.push({
             role: "assistant",
             content: `[Tool: ${item.name}]\n${JSON.stringify(item.input, null, 2)}`,
             timestamp: ts,
             toolName: item.name,
+            modelId: itemModel || undefined,
           });
         }
       }
@@ -575,6 +709,7 @@ async function parseClaudeConversation(path: string): Promise<Conversation> {
     source: "Claude Code",
     project,
     timestamp: sessionTs,
+    modelId: getConversationModel(messages) || undefined,
     messages,
   };
 }
@@ -596,6 +731,7 @@ async function parseCodexConversation(path: string): Promise<Conversation> {
   let sessionTs = "";
   let cwd = "";
   let title = "";
+  let currentModelId = "";
 
   for (const line of content.split("\n").filter(Boolean)) {
     let v: any;
@@ -603,11 +739,15 @@ async function parseCodexConversation(path: string): Promise<Conversation> {
 
     const ts = v.timestamp || "";
     if (!sessionTs && ts) sessionTs = ts;
+    const eventModel = readModelId(v);
+    if (eventModel) currentModelId = eventModel;
 
     if (v.type === "session_meta") cwd = v.payload?.cwd || "";
     if (v.type === "response_item") {
       const role = v.payload?.role;
       const items = v.payload?.content;
+      const responseModelId = firstString(readModelId(v.payload), currentModelId);
+      if (responseModelId) currentModelId = responseModelId;
       if (!Array.isArray(items)) continue;
 
       for (const item of items) {
@@ -619,7 +759,9 @@ async function parseCodexConversation(path: string): Promise<Conversation> {
           messages.push({ role: "user", content: text, timestamp: ts });
         } else if (item.type === "output_text" && role === "assistant") {
           if (item.text?.trim()) {
-            messages.push({ role: "assistant", content: item.text, timestamp: ts });
+            const itemModel = firstString(readModelId(item), responseModelId, currentModelId);
+            if (itemModel) currentModelId = itemModel;
+            messages.push({ role: "assistant", content: item.text, timestamp: ts, modelId: itemModel || undefined });
           }
         }
       }
@@ -631,6 +773,7 @@ async function parseCodexConversation(path: string): Promise<Conversation> {
     source: "Codex",
     project: cwd,
     timestamp: sessionTs,
+    modelId: getConversationModel(messages) || undefined,
     messages,
   };
 }
@@ -647,6 +790,7 @@ async function parsePiConversation(path: string): Promise<Conversation> {
     source: "Pi Coding Agent",
     project: header?.cwd || "",
     timestamp: header?.timestamp || "",
+    modelId: getConversationModel(messages) || undefined,
     messages,
   };
 }
@@ -660,7 +804,7 @@ async function parseSession(session: Session): Promise<Conversation> {
 
 // ── HTML generation ──────────────────────────────────────────────────
 
-function generateHtml(conv: Conversation): string {
+function generateHtml(conv: Conversation, viewerConfig: ViewerConfig): string {
   // Escape </script> so it doesn't close the JSON tag
   const jsonData = JSON.stringify(conv).replace(/<\//g, "<\\/");
   const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -677,7 +821,7 @@ function generateHtml(conv: Conversation): string {
 ${getAppShell()}
 <script id="data" type="application/json">${jsonData}</script>
 <script>${getViewerScript()}</script>
-<script>renderApp(JSON.parse(document.getElementById('data').textContent));</script>
+<script>renderApp(JSON.parse(document.getElementById('data').textContent), undefined, ${JSON.stringify(viewerConfig)});</script>
 </body>
 </html>`;
 }
@@ -748,15 +892,296 @@ function runCommand(command: string, args: string[], input?: string): Promise<Co
   });
 }
 
-// ── Share (encrypted gist) ───────────────────────────────────────────
+const MAX_SHARED_SESSION_BYTES = 200 * 1024 * 1024;
 
-const shareCache = new Map<string, ShareResult>();
+interface PublicShareMetadata {
+  title: string;
+  agent: string;
+  messageCount: number;
+  modelName?: string;
+  modelId?: string;
+  githubUsername?: string;
+}
+
+interface UploadSessionResponse {
+  id: string;
+  permalink: string;
+  deleteToken: string;
+}
 
 interface ShareResult {
+  id: string;
   publicUrl: string;
   privateUrl: string;
   key: string;
+  deleteToken: string;
 }
+
+interface StoredShareRecord {
+  sessionKey: string;
+  sessionHash: string;
+  share: ShareResult;
+  createdAt: string;
+  deletedAt?: string;
+}
+
+interface ShareStore {
+  version: 2;
+  records: StoredShareRecord[];
+}
+
+interface ShareUpsertEvent {
+  version: 2;
+  type: "share.upsert";
+  sessionKey: string;
+  sessionHash: string;
+  share: ShareResult;
+  createdAt: string;
+}
+
+interface ShareDeleteEvent {
+  version: 2;
+  type: "share.delete";
+  shareId: string;
+  deletedAt: string;
+}
+
+type ShareStoreEvent = ShareUpsertEvent | ShareDeleteEvent;
+
+const shareStoreLegacyPath = join(opentracesDir, "shares.json");
+const shareStorePath = join(opentracesDir, "shares.jsonl");
+
+function getAgentName(source: Session["source"]): string {
+  if (source === "claude") return "Claude Code";
+  if (source === "codex") return "Codex";
+  if (source === "opencode") return "OpenCode";
+  return "Pi Coding Agent";
+}
+
+function getSessionKey(session: Session): string {
+  return `${session.source}:${session.path}`;
+}
+
+function hashSessionRaw(raw: string): string {
+  return createHash("sha256").update(raw).digest("hex");
+}
+
+function isValidShareResult(value: any): value is ShareResult {
+  return Boolean(
+    value &&
+    typeof value.id === "string" &&
+    typeof value.publicUrl === "string" &&
+    typeof value.privateUrl === "string" &&
+    typeof value.key === "string" &&
+    typeof value.deleteToken === "string"
+  );
+}
+
+function getEmptyShareStore(): ShareStore {
+  return { version: 2, records: [] };
+}
+
+function isValidStoredShareRecord(record: any): record is StoredShareRecord {
+  return Boolean(
+    record &&
+    typeof record.sessionKey === "string" &&
+    typeof record.sessionHash === "string" &&
+    typeof record.createdAt === "string" &&
+    isValidShareResult(record.share) &&
+    (record.deletedAt === undefined || typeof record.deletedAt === "string")
+  );
+}
+
+function isShareStoreEvent(event: any): event is ShareStoreEvent {
+  if (!event || typeof event !== "object") return false;
+  if (event.version !== 2) return false;
+
+  if (event.type === "share.upsert") {
+    return typeof event.sessionKey === "string" &&
+      typeof event.sessionHash === "string" &&
+      typeof event.createdAt === "string" &&
+      isValidShareResult(event.share);
+  }
+
+  if (event.type === "share.delete") {
+    return typeof event.shareId === "string" && typeof event.deletedAt === "string";
+  }
+
+  return false;
+}
+
+function applyShareStoreEvent(store: ShareStore, event: ShareStoreEvent): void {
+  if (event.type === "share.upsert") {
+    upsertShareRecord(store, {
+      sessionKey: event.sessionKey,
+      sessionHash: event.sessionHash,
+      share: event.share,
+      createdAt: event.createdAt,
+    });
+    return;
+  }
+
+  markDeletedShareRecords(store, event.shareId, event.deletedAt);
+}
+
+async function appendShareStoreEvent(event: ShareStoreEvent): Promise<void> {
+  await mkdir(opentracesDir, { recursive: true });
+  await appendFile(shareStorePath, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+}
+
+async function migrateLegacyShareStore(store: ShareStore): Promise<void> {
+  await mkdir(opentracesDir, { recursive: true });
+  const events: ShareStoreEvent[] = [];
+
+  for (const record of store.records) {
+    events.push({
+      version: 2,
+      type: "share.upsert",
+      sessionKey: record.sessionKey,
+      sessionHash: record.sessionHash,
+      share: record.share,
+      createdAt: record.createdAt,
+    });
+
+    if (record.deletedAt) {
+      events.push({
+        version: 2,
+        type: "share.delete",
+        shareId: record.share.id,
+        deletedAt: record.deletedAt,
+      });
+    }
+  }
+
+  const serialized = events.map((event) => JSON.stringify(event)).join("\n");
+  await writeFile(shareStorePath, serialized ? `${serialized}\n` : "", { mode: 0o600 });
+}
+
+async function loadLegacyShareStore(): Promise<ShareStore> {
+  try {
+    const raw = await readFile(shareStoreLegacyPath, "utf-8");
+    const parsed = JSON.parse(raw) as Partial<ShareStore>;
+    if (!parsed || !Array.isArray(parsed.records)) return getEmptyShareStore();
+
+    const records = parsed.records.filter((record: any) => isValidStoredShareRecord(record)) as StoredShareRecord[];
+
+    return {
+      version: 2,
+      records,
+    };
+  } catch {
+    return getEmptyShareStore();
+  }
+}
+
+async function loadShareStore(): Promise<ShareStore> {
+  if (existsSync(shareStorePath)) {
+    const store = getEmptyShareStore();
+    const raw = await readFile(shareStorePath, "utf-8");
+
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line);
+        if (!isShareStoreEvent(event)) continue;
+        applyShareStoreEvent(store, event);
+      } catch {}
+    }
+
+    return store;
+  }
+
+  const legacyStore = await loadLegacyShareStore();
+  if (legacyStore.records.length > 0) {
+    await migrateLegacyShareStore(legacyStore);
+  }
+
+  return legacyStore;
+}
+
+function getActiveShareBySessionKey(store: ShareStore, sessionKey: string): StoredShareRecord | undefined {
+  for (let i = store.records.length - 1; i >= 0; i--) {
+    const record = store.records[i];
+    if (!record) continue;
+    if (!record.deletedAt && record.sessionKey === sessionKey) return record;
+  }
+  return undefined;
+}
+
+function getActiveShareByHash(store: ShareStore, sessionHash: string): StoredShareRecord | undefined {
+  for (let i = store.records.length - 1; i >= 0; i--) {
+    const record = store.records[i];
+    if (!record) continue;
+    if (!record.deletedAt && record.sessionHash === sessionHash) return record;
+  }
+  return undefined;
+}
+
+function upsertShareRecord(store: ShareStore, entry: StoredShareRecord): void {
+  const existingIndex = store.records.findIndex((record) => record.sessionKey === entry.sessionKey && !record.deletedAt);
+  if (existingIndex >= 0) {
+    store.records[existingIndex] = entry;
+    return;
+  }
+
+  store.records.push(entry);
+}
+
+function markDeletedShareRecords(store: ShareStore, shareId: string, deletedAt = new Date().toISOString()): void {
+  for (const record of store.records) {
+    if (record.share.id === shareId && !record.deletedAt) record.deletedAt = deletedAt;
+  }
+}
+
+async function uploadEncryptedSession(packed: Buffer, metadata: PublicShareMetadata, sessionHash: string): Promise<UploadSessionResponse> {
+  if (packed.byteLength > MAX_SHARED_SESSION_BYTES) {
+    throw new Error("session exceeds 200MB limit after encryption");
+  }
+
+  const response = await fetch(`${getPublicBaseUrl()}/api/sessions`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-opentraces-meta": Buffer.from(JSON.stringify(metadata), "utf-8").toString("base64url"),
+      "x-opentraces-content-sha256": sessionHash,
+    },
+    body: packed,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(errorBody || `session upload failed: ${response.status}`);
+  }
+
+  const body = await response.json() as Partial<UploadSessionResponse>;
+  if (!body.id || !body.permalink || !body.deleteToken) {
+    throw new Error("invalid upload response");
+  }
+
+  return {
+    id: body.id,
+    permalink: body.permalink,
+    deleteToken: body.deleteToken,
+  };
+}
+
+async function deleteSharedSession(share: ShareResult): Promise<void> {
+  const response = await fetch(`${getPublicBaseUrl()}/api/sessions/${share.id}`, {
+    method: "DELETE",
+    headers: {
+      "x-opentraces-delete-token": share.deleteToken,
+    },
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(errorBody || `session delete failed: ${response.status}`);
+  }
+}
+
+// ── Share (encrypted permalink) ──────────────────────────────────────
+
+const shareCache = new Map<string, ShareResult>();
 
 async function getSessionRaw(session: Session): Promise<string> {
   if (session.source === "opencode") {
@@ -771,46 +1196,66 @@ async function getSessionRaw(session: Session): Promise<string> {
   return await readFile(session.path, "utf-8");
 }
 
-async function generateShareUrl(session: Session): Promise<ShareResult> {
-  const raw = await getSessionRaw(session);
-
-  // Compress → encrypt → upload to private gist
-  const compressed = deflateRawSync(Buffer.from(raw), { level: 9 });
-
-  // AES-256-GCM with random 128-bit key
-  const key = randomBytes(16);
-  const aesKey = createHash("sha256").update(key).digest();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv("aes-256-gcm", aesKey, iv);
-  const encrypted = Buffer.concat([cipher.update(compressed), cipher.final()]);
-  const authTag = cipher.getAuthTag();
-
-  // Pack: iv(12) + ciphertext + authTag(16) — WebCrypto expects tag appended
-  const packed = Buffer.concat([iv, encrypted, authTag]);
-
-  // Upload to GitHub gist
-  const tmpFile = join(tmpdir(), `opentraces-${Date.now()}.bin`);
-  await writeFile(tmpFile, packed.toString("base64"));
-
-  const { stdout, stderr, exitCode } = await runCommand("gh", ["gist", "create", "--public=false", tmpFile]);
-
-  try { await unlink(tmpFile); } catch {}
-
-  if (exitCode !== 0) {
-    throw new Error(`gh gist create failed: ${stderr.trim()}`);
+function getSharedSessionModelId(session: Session, raw: string): string {
+  if (session.source === "opencode" || session.source === "pi") {
+    try {
+      const parsed = JSON.parse(raw) as Conversation;
+      return firstString(parsed.modelId);
+    } catch {
+      return "";
+    }
   }
 
-  const gistUrl = stdout.trim();
-  const gistId = gistUrl.split("/").pop();
-  if (!gistId) throw new Error(`couldn't parse gist ID from: ${gistUrl}`);
+  let currentModelId = "";
+  for (const line of raw.split("\n")) {
+    if (!line) continue;
+    try {
+      const parsed = JSON.parse(line);
+      const found = readModelId(parsed);
+      if (found) currentModelId = found;
+    } catch {}
+  }
+
+  return currentModelId;
+}
+
+function getSessionGithubUsername(viewerConfig: ViewerConfig): string {
+  const configured = firstString(viewerConfig.githubUsername);
+  if (configured) return configured.replace(/^@/, "");
+  const envValue = firstString(process.env.GITHUB_USERNAME, process.env.GITHUB_USER, process.env.GH_USER);
+  return envValue ? envValue.replace(/^@/, "") : "";
+}
+
+async function generateShareUrl(session: Session, raw: string, sessionHash: string, viewerConfig: ViewerConfig): Promise<ShareResult> {
+  const compressed = deflateRawSync(Buffer.from(raw), { level: 9 });
+  const modelId = getSharedSessionModelId(session, raw);
+  const githubUsername = getSessionGithubUsername(viewerConfig);
+
+  const key = randomBytes(32);
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(compressed), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  const packed = Buffer.concat([iv, encrypted, authTag]);
+
+  const uploaded = await uploadEncryptedSession(packed, {
+    title: session.title.trim() || "(untitled)",
+    agent: getAgentName(session.source),
+    messageCount: session.messageCount,
+    modelName: modelId || undefined,
+    modelId: modelId || undefined,
+    githubUsername: githubUsername || undefined,
+  }, sessionHash);
 
   const keyB64 = key.toString("base64url");
-  const base = `${getPublicBaseUrl()}/#${gistId}`;
+  const base = `${getPublicBaseUrl()}/s/${uploaded.id}`;
 
   return {
+    id: uploaded.id,
     publicUrl: base,
-    privateUrl: `${base}.${keyB64}`,
+    privateUrl: `${base}#${keyB64}`,
     key: keyB64,
+    deleteToken: uploaded.deleteToken,
   };
 }
 
@@ -921,15 +1366,16 @@ function render(state: TuiState) {
 
   // Column headers
   write(ansi.moveTo(2, 1));
+  const shW = 2;
   const srcW = 9;
   const projW = 14;
   const idW = 10;
   const msgW = 6;
   const dateW = 11;
-  const titleW = Math.max(20, cols - srcW - projW - idW - msgW - dateW - 7);
+  const titleW = Math.max(20, cols - shW - srcW - projW - idW - msgW - dateW - 8);
   write(
     `${ansi.dim}${ansi.fg(242)}` +
-    `${fit("SOURCE", srcW)} ${fit("PROJECT", projW)} ${fit("TITLE", titleW)} ${fit("ID", idW)} ${fit("MSGS", msgW)} ${fit("DATE", dateW)}` +
+    `${fit("S", shW)} ${fit("SOURCE", srcW)} ${fit("PROJECT", projW)} ${fit("TITLE", titleW)} ${fit("ID", idW)} ${fit("MSGS", msgW)} ${fit("DATE", dateW)}` +
     `${ansi.reset}`
   );
 
@@ -943,6 +1389,8 @@ function render(state: TuiState) {
 
     const idx = state.scroll + i;
     const selected = idx === state.cursor;
+    const sessionKey = getSessionKey(session);
+    const isShared = shareCache.has(sessionKey);
 
     const srcColor = session.source === "claude"
       ? ansi.fg(141)
@@ -963,10 +1411,12 @@ function render(state: TuiState) {
     }
 
     write(
+      `${selected ? "" : isShared ? ansi.fg(114) : ansi.fg(239)}${fit(isShared ? "●" : "", shW)}${selected ? "" : ansi.reset}` +
+      `${selected ? "" : ansi.fg(245)} ` +
       `${selected ? "" : srcColor}${fit(session.source, srcW)}${selected ? "" : ansi.reset}` +
       `${selected ? "" : ansi.fg(245)} ` +
       `${fit(project, projW)} ` +
-      `${selected ? "" : ansi.fg(250)}${fit(session.title, titleW)} ` +
+      `${selected ? "" : isShared ? `${ansi.bold}${ansi.fg(114)}` : ansi.fg(250)}${fit(session.title, titleW)}${selected ? "" : isShared ? ansi.reset + ansi.fg(245) : ""} ` +
       `${selected ? "" : ansi.fg(239)}${fit(shortId, idW)} ` +
       `${selected ? "" : ansi.dim}${fit(msgs, msgW)} ` +
       `${fit(date, dateW)}` +
@@ -993,7 +1443,7 @@ function render(state: TuiState) {
   } else {
     write(
       `${ansi.dim}${ansi.fg(242)}` +
-      `↑↓ navigate  / search  s share  c copy private  o open  q quit` +
+      `↑↓ navigate  / search  s share  c copy public  d delete share  o open  q quit` +
       `${ansi.reset}`
     );
   }
@@ -1046,6 +1496,12 @@ async function openInBrowser(path: string) {
 async function runTui() {
   write(ansi.altScreen);
   write(ansi.hideCursor);
+
+  const shareStore = await loadShareStore();
+  const viewerConfig = await loadViewerConfig();
+  for (const record of shareStore.records) {
+    if (!record.deletedAt) shareCache.set(record.sessionKey, record.share);
+  }
 
   // Enable raw mode
   if (!process.stdin.isTTY) {
@@ -1183,11 +1639,10 @@ async function runTui() {
       ensureVisible();
       render(state);
     } else if (key === "s") {
-      // Share: encrypt & upload, copy private URL (with key)
       const session = state.filtered[state.cursor];
       if (!session) return;
-      // Check cache
-      const cached = shareCache.get(session.path);
+      const sessionKey = getSessionKey(session);
+      const cached = shareCache.get(sessionKey);
       if (cached) {
         const ok = await copyToClipboard(cached.privateUrl);
         setStatus(state, ok ? `copied! key: ${cached.key}` : "clipboard failed", 8000);
@@ -1195,22 +1650,100 @@ async function runTui() {
       } else {
         setStatus(state, "encrypting & uploading...");
         try {
-          const share = await generateShareUrl(session);
-          shareCache.set(session.path, share);
+          const raw = await getSessionRaw(session);
+          const sessionHash = hashSessionRaw(raw);
+          const existingShared = getActiveShareByHash(shareStore, sessionHash);
+
+          if (existingShared) {
+            const reused: StoredShareRecord = {
+              sessionKey,
+              sessionHash,
+              share: existingShared.share,
+              createdAt: new Date().toISOString(),
+            };
+            upsertShareRecord(shareStore, reused);
+            await appendShareStoreEvent({
+              version: 2,
+              type: "share.upsert",
+              sessionKey: reused.sessionKey,
+              sessionHash: reused.sessionHash,
+              share: reused.share,
+              createdAt: reused.createdAt,
+            });
+            shareCache.set(sessionKey, existingShared.share);
+            state.lastShare = existingShared.share;
+            const ok = await copyToClipboard(existingShared.share.privateUrl);
+            setStatus(state, ok ? `already shared. copied key: ${existingShared.share.key}` : "clipboard failed", 8000);
+            render(state);
+            return;
+          }
+
+          const share = await generateShareUrl(session, raw, sessionHash, viewerConfig);
+          shareCache.set(sessionKey, share);
+          upsertShareRecord(shareStore, {
+            sessionKey,
+            sessionHash,
+            share,
+            createdAt: new Date().toISOString(),
+          });
+          await appendShareStoreEvent({
+            version: 2,
+            type: "share.upsert",
+            sessionKey,
+            sessionHash,
+            share,
+            createdAt: new Date().toISOString(),
+          });
           state.lastShare = share;
           const ok = await copyToClipboard(share.privateUrl);
           setStatus(state, ok ? `copied! key: ${share.key}` : "clipboard failed", 8000);
+          render(state);
         } catch (e: any) {
           setStatus(state, `error: ${e.message}`);
         }
       }
     } else if (key === "c") {
-      // Copy public URL (without key) from last share
-      if (!state.lastShare) {
+      const session = state.filtered[state.cursor];
+      const fromSelection = session ? shareCache.get(getSessionKey(session)) : undefined;
+      const share = fromSelection ?? state.lastShare;
+
+      if (!share) {
         setStatus(state, "press s first to share");
       } else {
-        const ok = await copyToClipboard(state.lastShare.publicUrl);
+        const ok = await copyToClipboard(share.publicUrl);
         setStatus(state, ok ? "public url copied (no key)" : "clipboard failed");
+      }
+    } else if (key === "d") {
+      const session = state.filtered[state.cursor];
+      if (!session) return;
+
+      const sessionKey = getSessionKey(session);
+
+      const share = shareCache.get(sessionKey);
+      if (!share) {
+        setStatus(state, "session not shared yet");
+        return;
+      }
+
+      setStatus(state, "deleting shared session...");
+      try {
+        await deleteSharedSession(share);
+        for (const [key, value] of shareCache.entries()) {
+          if (value.id === share.id) shareCache.delete(key);
+        }
+        const deletedAt = new Date().toISOString();
+        markDeletedShareRecords(shareStore, share.id, deletedAt);
+        await appendShareStoreEvent({
+          version: 2,
+          type: "share.delete",
+          shareId: share.id,
+          deletedAt,
+        });
+        if (state.lastShare?.id === share.id) state.lastShare = undefined;
+        setStatus(state, "shared session deleted");
+        render(state);
+      } catch (e: any) {
+        setStatus(state, `error: ${e.message}`);
       }
     } else if (key === "o") {
       // Open in browser
@@ -1219,7 +1752,7 @@ async function runTui() {
       setStatus(state, "opening...");
       try {
         const conv = await parseSession(session);
-        const html = generateHtml(conv);
+        const html = generateHtml(conv, viewerConfig);
         const tmp = join(
           tmpdir(),
           `opentraces-${session.id.slice(0, 8)}.html`
@@ -1237,7 +1770,7 @@ async function runTui() {
       setStatus(state, "exporting...");
       try {
         const conv = await parseSession(session);
-        const html = generateHtml(conv);
+        const html = generateHtml(conv, viewerConfig);
         const outPath = `${session.id.slice(0, 8)}.html`;
         await writeFile(outPath, html);
         setStatus(state, `saved ${outPath}`);

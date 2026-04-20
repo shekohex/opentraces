@@ -1,9 +1,65 @@
 // ── Shared viewer — called by both local exports and share viewer ────
 // Usage: renderApp({ messages, title, source, project, timestamp }, rawDownloadData)
 
-function renderApp(data, rawDownloadData) {
+function renderApp(data, rawDownloadData, viewerConfig) {
   var allMessages = data.messages || [];
-  var meta = { title: data.title || '', source: data.source || '', project: data.project || '', timestamp: data.timestamp || '' };
+  var meta = {
+    title: data.title || '',
+    source: data.source || '',
+    project: data.project || '',
+    timestamp: data.timestamp || '',
+    modelId: data.modelId || '',
+    githubUsername: data.githubUsername || '',
+    githubAvatarUrl: data.githubAvatarUrl || ''
+  };
+  var config = viewerConfig || {};
+  var configuredUserLabel = (typeof config.userLabel === 'string' && config.userLabel.trim()) ? config.userLabel.trim() : 'user';
+  var assistantFallbackLabel = (typeof config.assistantFallbackLabel === 'string' && config.assistantFallbackLabel.trim()) ? config.assistantFallbackLabel.trim() : 'assistant';
+  var metadataUserLabel = meta.githubUsername ? ('@' + meta.githubUsername.replace(/^@/, '')) : '';
+  var userLabel = metadataUserLabel || configuredUserLabel;
+  var userAvatarUrl = meta.githubAvatarUrl || (typeof config.userAvatarUrl === 'string' ? config.userAvatarUrl.trim() : '');
+  var modelLabel = meta.modelId || '';
+  if (!modelLabel) {
+    for (var mi = allMessages.length - 1; mi >= 0; mi--) {
+      if (allMessages[mi] && allMessages[mi].modelId) { modelLabel = allMessages[mi].modelId; break; }
+    }
+  }
+
+  var themeStorageKey = 'opentraces.theme';
+  var systemThemeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+
+  function normalizeThemePreference(value) {
+    return value === 'light' || value === 'dark' ? value : 'system';
+  }
+
+  function getStoredThemePreference() {
+    try {
+      return normalizeThemePreference(localStorage.getItem(themeStorageKey) || 'system');
+    } catch (e) {
+      return 'system';
+    }
+  }
+
+  function getResolvedTheme(preference) {
+    if (preference === 'system') {
+      return systemThemeMedia.matches ? 'dark' : 'light';
+    }
+    return preference;
+  }
+
+  function applyTheme(preference) {
+    var resolved = getResolvedTheme(preference);
+    document.documentElement.setAttribute('data-theme', resolved);
+  }
+
+  function persistThemePreference(preference) {
+    try {
+      localStorage.setItem(themeStorageKey, preference);
+    } catch (e) {}
+  }
+
+  var themePreference = getStoredThemePreference();
+  applyTheme(themePreference);
 
   // ── Helpers ──────────────────────────────────────────────────────
   function esc(s) {
@@ -36,6 +92,13 @@ function renderApp(data, rawDownloadData) {
     return s.length > n ? s.slice(0, n) + '...' : s;
   }
 
+  function messageWho(m, isTool) {
+    if (isTool) return m.toolName;
+    if (m.role === 'user') return userLabel;
+    if (m.role === 'assistant') return m.modelId || modelLabel || assistantFallbackLabel;
+    return m.role;
+  }
+
   // ── Filter state ───────────────────────────────────────────────
   var filterMode = 'default';
   var searchQuery = '';
@@ -61,12 +124,20 @@ function renderApp(data, rawDownloadData) {
     '<h1>' + esc(meta.title || 'Conversation') + '</h1>' +
     '<div class="meta">' +
     '<span class="source">' + esc(meta.source) + '</span>' +
+    (modelLabel ? '<span class="session-model">' + esc(modelLabel) + '</span>' : '') +
+    (metadataUserLabel ? '<span class="session-user">' + esc(metadataUserLabel) + '</span>' : '') +
     '<span>' + esc(meta.project) + '</span>' +
     '<span>' + esc(meta.timestamp) + '</span>' +
     '<span>' + allMessages.length + ' messages</span>' +
     '<button class="dl-btn" id="dl-btn">&#8595; JSONL</button>' +
     '</div>' +
     '<div class="help-bar">Ctrl+O toggle tools · Esc clear search</div>';
+
+  if (systemThemeMedia && typeof systemThemeMedia.addEventListener === 'function') {
+    systemThemeMedia.addEventListener('change', function () {
+      if (themePreference === 'system') applyTheme(themePreference);
+    });
+  }
 
   // ── Download ───────────────────────────────────────────────────
   document.getElementById('dl-btn').addEventListener('click', function () {
@@ -86,6 +157,30 @@ function renderApp(data, rawDownloadData) {
   var thread = document.getElementById('thread');
   var treeContainer = document.getElementById('tree-container');
   var treeStatus = document.getElementById('tree-status');
+  var treeStatusCount = document.createElement('span');
+  treeStatusCount.className = 'tree-status-count';
+
+  var treeThemeWrap = document.createElement('label');
+  treeThemeWrap.className = 'tree-theme-wrap';
+  treeThemeWrap.innerHTML = '<span>theme</span>';
+
+  var themeSelect = document.createElement('select');
+  themeSelect.className = 'tree-theme-select';
+  themeSelect.innerHTML =
+    '<option value="system">system</option>' +
+    '<option value="dark">dark</option>' +
+    '<option value="light">light</option>';
+  themeSelect.value = themePreference;
+  themeSelect.addEventListener('change', function (e) {
+    themePreference = normalizeThemePreference(e.target.value);
+    persistThemePreference(themePreference);
+    applyTheme(themePreference);
+  });
+
+  treeThemeWrap.appendChild(themeSelect);
+  treeStatus.innerHTML = '';
+  treeStatus.appendChild(treeStatusCount);
+  treeStatus.appendChild(treeThemeWrap);
 
   function refresh() {
     thread.innerHTML = '';
@@ -104,11 +199,14 @@ function renderApp(data, rawDownloadData) {
       d.className = 'msg ' + (isTool ? 'tool' : m.role);
       d.id = 'msg-' + idx;
       if (isTool) d.dataset.tool = '1';
-      var who = isTool ? m.toolName : m.role;
+      var who = messageWho(m, isTool);
+      var whoPrefix = (!isTool && m.role === 'user' && userAvatarUrl)
+        ? '<img class="who-avatar" src="' + esc(userAvatarUrl) + '" alt="avatar">'
+        : '';
       var time = fmtTime(m.timestamp);
       d.innerHTML =
         (time ? '<span class="time">' + time + '</span>' : '') +
-        '<div class="who">' + esc(who) + '</div>' +
+        '<div class="who">' + whoPrefix + '<span>' + esc(who) + '</span></div>' +
         '<div class="body">' + (isTool ? '<pre>' + esc(m.content) + '</pre>' : md(m.content)) + '</div>';
       thread.appendChild(d);
 
@@ -117,9 +215,10 @@ function renderApp(data, rawDownloadData) {
       tn.className = 'tree-node';
       var roleClass = isTool ? 'tree-role-tool' : m.role === 'user' ? 'tree-role-user' : 'tree-role-assistant';
       var preview = m.content.replace(/[\n\t]/g, ' ').trim();
+      var treeWho = messageWho(m, isTool);
       tn.innerHTML =
         '<span class="tree-marker">&bull;</span>' +
-        '<span class="tree-content"><span class="' + roleClass + '">' + esc(isTool ? m.toolName : m.role) + ':</span> ' +
+        '<span class="tree-content"><span class="' + roleClass + '">' + esc(treeWho) + ':</span> ' +
         esc(truncate(preview, 60)) + '</span>';
       (function (i) {
         tn.addEventListener('click', function () {
@@ -136,7 +235,7 @@ function renderApp(data, rawDownloadData) {
       treeContainer.appendChild(tn);
     });
 
-    treeStatus.textContent = visible + ' / ' + total + ' entries';
+    treeStatusCount.textContent = visible + ' / ' + total + ' entries';
   }
 
   refresh();

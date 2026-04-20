@@ -3,27 +3,27 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>opentraces — browse, export & share AI coding sessions</title>
-<meta name="description" content="A terminal UI to browse, export, and share your Claude Code, Codex, OpenCode, and Pi Coding Agent sessions. End-to-end encrypted sharing via GitHub gists.">
+<title>{{PAGE_TITLE}}</title>
+<meta name="description" content="{{PAGE_DESCRIPTION}}">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
-<meta property="og:url" content="{{PUBLIC_URL}}">
-<meta property="og:title" content="opentraces">
-<meta property="og:description" content="Browse, export & share your Claude Code, Codex, OpenCode, and Pi Coding Agent sessions. Fuzzy search, encrypted sharing, vim keybindings.">
+<meta property="og:url" content="{{PAGE_URL}}">
+<meta property="og:title" content="{{OG_TITLE}}">
+<meta property="og:description" content="{{OG_DESCRIPTION}}">
 <meta property="og:image" content="{{PUBLIC_URL}}/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 
 <!-- Twitter -->
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="opentraces">
-<meta name="twitter:description" content="Browse, export & share your Claude Code, Codex, OpenCode, and Pi Coding Agent sessions. Fuzzy search, encrypted sharing, vim keybindings.">
+<meta name="twitter:title" content="{{OG_TITLE}}">
+<meta name="twitter:description" content="{{OG_DESCRIPTION}}">
 <meta name="twitter:image" content="{{PUBLIC_URL}}/og.png">
 
 <style>
-@font-face{font-family:'Berkeley Mono';font-weight:400;font-style:normal;src:url('/BerkeleyMono-Regular.otf') format('opentype')}
-@font-face{font-family:'Berkeley Mono';font-weight:700;font-style:normal;src:url('/BerkeleyMono-Bold.otf') format('opentype')}
+@font-face{font-family:'IBM Plex Nerd Font Mono';font-weight:400;font-style:normal;src:url('/assets/fonts/IBMPlexNerdFontMono-Regular.ttf') format('truetype');font-display:swap}
+@font-face{font-family:'IBM Plex Nerd Font Mono';font-weight:700;font-style:normal;src:url('/assets/fonts/IBMPlexNerdFontMono-Bold.ttf') format('truetype');font-display:swap}
 
 /* States (site-specific) */
 .state{display:none;align-items:center;justify-content:center;min-height:100vh;text-align:center}
@@ -119,7 +119,7 @@
       </div>
       <div class="landing-feat">
         <span class="landing-feat-icon">&bull;</span>
-        <span class="landing-feat-text"><strong>encrypted sharing</strong> via GitHub gists</span>
+        <span class="landing-feat-text"><strong>encrypted sharing</strong> via stable permalinks</span>
       </div>
       <div class="landing-feat">
         <span class="landing-feat-icon">&bull;</span>
@@ -157,17 +157,27 @@ document.getElementById('install-cmd').addEventListener('click',function(){
 
 {{SHELL}}
 
+<script id="opentraces-session-id" type="application/json">{{SESSION_ID_JSON}}</script>
+<script id="opentraces-session-meta" type="application/json">{{SESSION_METADATA_JSON}}</script>
+<script id="opentraces-viewer-config" type="application/json">{{VIEWER_CONFIG_JSON}}</script>
+<script>
+window.__OPENTRACES_SESSION_ID__ = null;
+window.__OPENTRACES_SESSION_METADATA__ = null;
+window.__OPENTRACES_VIEWER_CONFIG__ = { userLabel: 'user', userAvatarUrl: '', assistantFallbackLabel: 'assistant', githubUsername: '' };
+try { window.__OPENTRACES_SESSION_ID__ = JSON.parse(document.getElementById('opentraces-session-id').textContent); } catch {}
+try { window.__OPENTRACES_SESSION_METADATA__ = JSON.parse(document.getElementById('opentraces-session-meta').textContent); } catch {}
+try { window.__OPENTRACES_VIEWER_CONFIG__ = JSON.parse(document.getElementById('opentraces-viewer-config').textContent); } catch {}
+</script>
 <script>{{VIEWER_JS}}</script>
 <script>
 (async function(){
-  var hash = location.hash.slice(1);
-  if (!hash) return;
+  var sessionId = window.__OPENTRACES_SESSION_ID__;
+  var sharedMetadata = window.__OPENTRACES_SESSION_METADATA__;
+  if (!sessionId) return;
 
   show('loading');
 
-  var dotIdx = hash.indexOf('.');
-  var gistId = dotIdx === -1 ? hash : hash.slice(0, dotIdx);
-  var keyB64 = dotIdx === -1 ? '' : hash.slice(dotIdx + 1);
+  var keyB64 = location.hash.slice(1);
 
   if (!keyB64) {
     show('key-prompt');
@@ -182,7 +192,7 @@ document.getElementById('install-cmd').addEventListener('click',function(){
 
   var raw;
   try {
-    raw = await fetchAndDecryptGist(gistId, keyB64);
+    raw = await fetchAndDecryptSession(sessionId, keyB64);
   } catch(e) {
     console.error(e);
     document.querySelector('#error p').textContent = e.message || 'failed to load conversation';
@@ -192,7 +202,16 @@ document.getElementById('install-cmd').addEventListener('click',function(){
 
   // Try JSON (opencode) first, then JSONL (claude/codex)
   var messages = [];
-  var meta = { source: '', title: '', project: '', timestamp: '', messages: [] };
+  var meta = {
+    source: '',
+    title: sharedMetadata && sharedMetadata.title ? sharedMetadata.title : '',
+    project: '',
+    timestamp: '',
+    modelId: sharedMetadata && (sharedMetadata.modelName || sharedMetadata.modelId) ? (sharedMetadata.modelName || sharedMetadata.modelId) : '',
+    githubUsername: sharedMetadata && sharedMetadata.githubUsername ? sharedMetadata.githubUsername : '',
+    githubAvatarUrl: sharedMetadata && sharedMetadata.githubAvatarUrl ? sharedMetadata.githubAvatarUrl : '',
+    messages: []
+  };
   var parsed = null;
   try { parsed = JSON.parse(raw); } catch(e) {}
 
@@ -200,9 +219,10 @@ document.getElementById('install-cmd').addEventListener('click',function(){
     // Pre-parsed conversation format (opencode)
     messages = parsed.messages;
     meta.source = parsed.source || '';
-    meta.title = parsed.title || '';
+    meta.title = parsed.title || meta.title;
     meta.project = parsed.project || '';
     meta.timestamp = parsed.timestamp || '';
+    meta.modelId = parsed.modelId || meta.modelId;
   } else {
     // JSONL format (claude/codex)
     var lines = raw.split('\n');
@@ -225,7 +245,7 @@ document.getElementById('install-cmd').addEventListener('click',function(){
 
   show('app');
   meta.messages = messages;
-  renderApp(meta, raw);
+  renderApp(meta, raw, window.__OPENTRACES_VIEWER_CONFIG__ || undefined);
 
   // ── Helpers ─────────────────────────────────────────────
 
@@ -239,27 +259,73 @@ document.getElementById('install-cmd').addEventListener('click',function(){
     }
   }
 
-  async function fetchAndDecryptGist(gistId, keyB64) {
-    var resp = await fetch('https://api.github.com/gists/' + gistId);
-    if (resp.status === 403) throw new Error('GitHub API rate limit — try again in a few minutes');
-    if (resp.status === 404) throw new Error('gist not found — it may have been deleted');
-    if (!resp.ok) throw new Error('gist fetch failed: ' + resp.status);
-    var gist = await resp.json();
-    var files = Object.values(gist.files);
-    if (!files.length) throw new Error('empty gist');
-    var rawUrl = files[0].raw_url;
-    var rawResp = await fetch(rawUrl);
-    if (!rawResp.ok) throw new Error('gist raw fetch failed: ' + rawResp.status);
-    var b64content = await rawResp.text();
-    var packed = Uint8Array.from(atob(b64content.trim()), function(c){ return c.charCodeAt(0); });
+  function decodeBase64Url(input) {
+    var normalized = String(input || '').trim().replace(/-/g, '+').replace(/_/g, '/');
+    var pad = normalized.length % 4;
+    if (pad === 2) normalized += '==';
+    else if (pad === 3) normalized += '=';
+    else if (pad !== 0) throw new Error('invalid key');
+    return Uint8Array.from(atob(normalized), function(c){ return c.charCodeAt(0); });
+  }
+
+  function firstString() {
+    for (var i = 0; i < arguments.length; i++) {
+      var value = arguments[i];
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    }
+    return '';
+  }
+
+  function readModelId(value) {
+    if (!value || typeof value !== 'object') return '';
+
+    var direct = firstString(
+      value.modelId,
+      value.model_id,
+      value.model,
+      value.assistantModel,
+      value.assistant_model,
+      value.responseModel,
+      value.response_model
+    );
+    if (direct) return direct;
+
+    return firstString(
+      value.model && value.model.id,
+      value.model && value.model.name,
+      value.model_info && value.model_info.id,
+      value.model_info && value.model_info.name,
+      value.payload && value.payload.model,
+      value.payload && value.payload.model_id,
+      value.payload && value.payload.modelId,
+      value.payload && value.payload.model && value.payload.model.id,
+      value.payload && value.payload.model && value.payload.model.name,
+      value.message && value.message.model,
+      value.message && value.message.model_id,
+      value.message && value.message.modelId
+    );
+  }
+
+  async function fetchAndDecryptSession(sessionId, keyB64) {
+    var resp = await fetch('/api/sessions/' + encodeURIComponent(sessionId) + '/blob');
+    if (resp.status === 404) throw new Error('session not found — it may have been deleted');
+    if (!resp.ok) throw new Error('session fetch failed: ' + resp.status);
+    var packed = new Uint8Array(await resp.arrayBuffer());
+    if (packed.length < 28) throw new Error('invalid encrypted payload');
 
     var iv = packed.slice(0, 12);
     var payload = packed.slice(12);
 
-    var keyBytes = Uint8Array.from(atob(keyB64.replace(/-/g, '+').replace(/_/g, '/')), function(c){ return c.charCodeAt(0); });
-    var aesKey = await crypto.subtle.digest('SHA-256', keyBytes);
-    var cryptoKey = await crypto.subtle.importKey('raw', aesKey, { name: 'AES-GCM' }, false, ['decrypt']);
-    var decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, cryptoKey, payload);
+    var keyBytes = decodeBase64Url(keyB64);
+    if (keyBytes.length !== 32) throw new Error('invalid key length');
+
+    var cryptoKey = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+    var decrypted;
+    try {
+      decrypted = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: iv }, cryptoKey, payload);
+    } catch {
+      throw new Error('failed to decrypt session — check key');
+    }
 
     var ds = new DecompressionStream('deflate-raw');
     var writer = ds.writable.getWriter();
@@ -294,6 +360,8 @@ document.getElementById('install-cmd').addEventListener('click',function(){
   }
 
   function parseClaudeLine(v, msgs, meta) {
+    var eventModel = readModelId(v);
+    if (eventModel) meta.modelId = eventModel;
     if (!meta.timestamp && v.timestamp) meta.timestamp = v.timestamp;
     if (!meta.project && v.cwd) meta.project = v.cwd;
     if (!meta.source) meta.source = 'Claude Code';
@@ -306,9 +374,13 @@ document.getElementById('install-cmd').addEventListener('click',function(){
       for (var j = 0; j < v.message.content.length; j++) {
         var item = v.message.content[j];
         if (item.type === 'text' && item.text && item.text.trim()) {
-          msgs.push({ role: 'assistant', content: item.text, timestamp: ts });
+          var itemModel = firstString(readModelId(item), meta.modelId);
+          if (itemModel) meta.modelId = itemModel;
+          msgs.push({ role: 'assistant', content: item.text, timestamp: ts, modelId: itemModel || undefined });
         } else if (item.type === 'tool_use') {
-          msgs.push({ role: 'assistant', content: '[Tool: ' + (item.name||'tool') + ']\n' + JSON.stringify(item.input, null, 2), timestamp: ts, toolName: item.name });
+          var toolModel = firstString(readModelId(item), meta.modelId);
+          if (toolModel) meta.modelId = toolModel;
+          msgs.push({ role: 'assistant', content: '[Tool: ' + (item.name||'tool') + ']\n' + JSON.stringify(item.input, null, 2), timestamp: ts, toolName: item.name, modelId: toolModel || undefined });
         }
       }
     }
@@ -316,12 +388,16 @@ document.getElementById('install-cmd').addEventListener('click',function(){
 
   function parseCodexLine(v, msgs, meta) {
     var ts = v.timestamp || '';
+    var eventModel = readModelId(v);
+    if (eventModel) meta.modelId = eventModel;
     if (!meta.timestamp && ts) meta.timestamp = ts;
     if (!meta.source) meta.source = 'Codex';
     if (v.type === 'session_meta' && v.payload) { if (v.payload.cwd) meta.project = v.payload.cwd; }
     if (v.type === 'response_item' && v.payload) {
       var role = v.payload.role;
       var items = v.payload.content;
+      var responseModel = firstString(readModelId(v.payload), meta.modelId);
+      if (responseModel) meta.modelId = responseModel;
       if (!Array.isArray(items)) return;
       for (var j = 0; j < items.length; j++) {
         var item = items[j];
@@ -332,7 +408,11 @@ document.getElementById('install-cmd').addEventListener('click',function(){
           if (!meta.title) meta.title = text.slice(0, 80);
           msgs.push({ role: 'user', content: text, timestamp: ts });
         } else if (item.type === 'output_text' && role === 'assistant') {
-          if (item.text && item.text.trim()) msgs.push({ role: 'assistant', content: item.text, timestamp: ts });
+          if (item.text && item.text.trim()) {
+            var itemModel = firstString(readModelId(item), responseModel, meta.modelId);
+            if (itemModel) meta.modelId = itemModel;
+            msgs.push({ role: 'assistant', content: item.text, timestamp: ts, modelId: itemModel || undefined });
+          }
         }
       }
     }
@@ -340,6 +420,14 @@ document.getElementById('install-cmd').addEventListener('click',function(){
 
   function parsePiLine(v, msgs, meta) {
     if (!meta.source) meta.source = 'Pi Coding Agent';
+
+    var eventModel = readModelId(v);
+    if (eventModel) meta.modelId = eventModel;
+
+    if (v.type === 'model_change') {
+      meta.modelId = firstString(v.modelId, v.model_id, v.model, v.to, v.value, meta.modelId);
+      return;
+    }
 
     if (v.type === 'session') {
       if (!meta.timestamp && v.timestamp) meta.timestamp = v.timestamp;
@@ -377,6 +465,8 @@ document.getElementById('install-cmd').addEventListener('click',function(){
 
     var msg = v.message;
     var role = msg.role;
+    var msgModel = firstString(readModelId(msg), meta.modelId);
+    if (msgModel) meta.modelId = msgModel;
 
     if (role === 'user') {
       var userText = extractContent(msg.content);
@@ -392,23 +482,23 @@ document.getElementById('install-cmd').addEventListener('click',function(){
           var block = content[j];
           if (!block) continue;
           if (block.type === 'text' && block.text && block.text.trim()) {
-            msgs.push({ role: 'assistant', content: block.text, timestamp: ts });
+            msgs.push({ role: 'assistant', content: block.text, timestamp: ts, modelId: msgModel || undefined });
           } else if (block.type === 'toolCall') {
             var name = block.name || 'tool';
             var argsText = block.arguments !== undefined ? '\n' + JSON.stringify(block.arguments, null, 2) : '';
-            msgs.push({ role: 'assistant', content: '[Tool: ' + name + ']' + argsText, timestamp: ts, toolName: name });
+            msgs.push({ role: 'assistant', content: '[Tool: ' + name + ']' + argsText, timestamp: ts, toolName: name, modelId: msgModel || undefined });
           }
         }
       } else {
         var assistantText = extractContent(content);
-        if (assistantText.trim()) msgs.push({ role: 'assistant', content: assistantText, timestamp: ts });
+        if (assistantText.trim()) msgs.push({ role: 'assistant', content: assistantText, timestamp: ts, modelId: msgModel || undefined });
       }
       return;
     }
 
     if (role === 'toolResult') {
       var toolText = extractContent(msg.content) || '(no output)';
-      msgs.push({ role: 'assistant', content: toolText, timestamp: ts, toolName: msg.toolName || 'tool' });
+      msgs.push({ role: 'assistant', content: toolText, timestamp: ts, toolName: msg.toolName || 'tool', modelId: msgModel || undefined });
       return;
     }
 
@@ -416,25 +506,25 @@ document.getElementById('install-cmd').addEventListener('click',function(){
       var command = msg.command || 'bash';
       var output = msg.output || '';
       var body = output.trim() ? 'Ran `' + command + '`\n\n' + output : 'Ran `' + command + '`';
-      msgs.push({ role: 'assistant', content: body, timestamp: ts, toolName: 'bash' });
+      msgs.push({ role: 'assistant', content: body, timestamp: ts, toolName: 'bash', modelId: msgModel || undefined });
       return;
     }
 
     if (role === 'custom') {
       var customRoleText = extractContent(msg.content);
       if (customRoleText.trim()) {
-        msgs.push({ role: 'assistant', content: customRoleText, timestamp: ts, toolName: msg.customType || 'custom' });
+        msgs.push({ role: 'assistant', content: customRoleText, timestamp: ts, toolName: msg.customType || 'custom', modelId: msgModel || undefined });
       }
       return;
     }
 
     if (role === 'branchSummary' && typeof msg.summary === 'string' && msg.summary.trim()) {
-      msgs.push({ role: 'assistant', content: '[Branch Summary]\n' + msg.summary, timestamp: ts });
+      msgs.push({ role: 'assistant', content: '[Branch Summary]\n' + msg.summary, timestamp: ts, modelId: msgModel || undefined });
       return;
     }
 
     if (role === 'compactionSummary' && typeof msg.summary === 'string' && msg.summary.trim()) {
-      msgs.push({ role: 'assistant', content: '[Compaction Summary]\n' + msg.summary, timestamp: ts });
+      msgs.push({ role: 'assistant', content: '[Compaction Summary]\n' + msg.summary, timestamp: ts, modelId: msgModel || undefined });
     }
   }
 
