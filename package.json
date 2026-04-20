@@ -1,7 +1,7 @@
 {
   "name": "opentraces",
   "version": "0.2.0",
-  "description": "Browse, export & share Claude Code, Codex & OpenCode sessions",
+  "description": "Browse, export & share Claude Code, Codex, OpenCode & Pi Coding Agent sessions",
   "module": "index.ts",
   "type": "module",
   "bin": {

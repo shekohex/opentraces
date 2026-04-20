@@ -2,7 +2,7 @@
 
 # opentraces
 
-terminal UI for browsing and sharing your Claude Code, Codex, and OpenCode sessions.
+terminal UI for browsing and sharing your Claude Code, Codex, OpenCode, and Pi Coding Agent sessions.
 
 ```
 npx opentraces
@@ -16,7 +16,7 @@ npm start
 
 ## what it does
 
-- finds all your local Claude Code, Codex, and OpenCode sessions
+- finds all your local Claude Code, Codex, OpenCode, and Pi Coding Agent sessions
 - fuzzy search across everything
 - `s` to share — encrypts the session (AES-256-GCM) and uploads to a private GitHub gist
 - `o` to open in browser as a self-contained HTML viewer

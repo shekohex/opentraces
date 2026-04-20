@@ -19,7 +19,7 @@ let _viewerJs: string | null = null;
 
 interface Session {
   id: string;
-  source: "claude" | "codex" | "opencode";
+  source: "claude" | "codex" | "opencode" | "pi";
   project: string;
   title: string;
   timestamp: Date;
@@ -52,6 +52,195 @@ function extractProjectName(dirName: string): string {
   }
   // Fallback: last segment after -
   return dirName.split("-").filter(Boolean).pop() || dirName;
+}
+
+interface PiSessionHeader {
+  type: "session";
+  id: string;
+  timestamp?: string;
+  cwd?: string;
+}
+
+interface PiSessionEntry {
+  type: string;
+  id?: string;
+  parentId?: string | null;
+  timestamp?: string;
+  [key: string]: any;
+}
+
+function parseJsonLines(content: string): any[] {
+  const entries: any[] = [];
+  for (const line of content.split("\n")) {
+    if (!line) continue;
+    try {
+      entries.push(JSON.parse(line));
+    } catch {}
+  }
+  return entries;
+}
+
+function extractTextFromBlocks(content: any): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((x: any) => x && x.type === "text" && typeof x.text === "string")
+      .map((x: any) => x.text)
+      .join("\n");
+  }
+  return "";
+}
+
+function parsePiSessionFile(content: string): { header: PiSessionHeader | null; entries: PiSessionEntry[] } {
+  const parsed = parseJsonLines(content);
+  const header = parsed.find((e: any) => e?.type === "session" && typeof e.id === "string") as PiSessionHeader | undefined;
+  const entries = parsed.filter((e: any) => e?.type !== "session") as PiSessionEntry[];
+  return { header: header || null, entries };
+}
+
+function buildPiPath(entries: PiSessionEntry[]): PiSessionEntry[] {
+  const byId = new Map<string, PiSessionEntry>();
+  for (const entry of entries) {
+    if (typeof entry.id === "string") byId.set(entry.id, entry);
+  }
+
+  let leaf: PiSessionEntry | undefined;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (typeof entries[i]?.id === "string") {
+      leaf = entries[i];
+      break;
+    }
+  }
+
+  if (!leaf) return entries;
+
+  const path: PiSessionEntry[] = [];
+  const seen = new Set<string>();
+  let current: PiSessionEntry | undefined = leaf;
+
+  while (current && typeof current.id === "string" && !seen.has(current.id)) {
+    path.unshift(current);
+    seen.add(current.id);
+    const parentId = current.parentId;
+    if (typeof parentId !== "string") break;
+    current = byId.get(parentId);
+  }
+
+  return path.length > 0 ? path : entries;
+}
+
+function getPiSessionName(pathEntries: PiSessionEntry[]): string {
+  for (let i = pathEntries.length - 1; i >= 0; i--) {
+    const entry = pathEntries[i];
+    if (!entry) continue;
+    if (entry.type === "session_info") {
+      const name = typeof entry.name === "string" ? entry.name.trim() : "";
+      return name;
+    }
+  }
+  return "";
+}
+
+function convertPiEntriesToMessages(pathEntries: PiSessionEntry[]): { messages: Message[]; firstUserMsg: string } {
+  const messages: Message[] = [];
+  let firstUserMsg = "";
+
+  const pushUser = (text: string, ts: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (!firstUserMsg) firstUserMsg = trimmed.slice(0, 80);
+    messages.push({ role: "user", content: trimmed, timestamp: ts });
+  };
+
+  const pushAssistant = (text: string, ts: string, toolName?: string) => {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    if (toolName) messages.push({ role: "assistant", content: trimmed, timestamp: ts, toolName });
+    else messages.push({ role: "assistant", content: trimmed, timestamp: ts });
+  };
+
+  for (const entry of pathEntries) {
+    const ts = typeof entry.timestamp === "string" ? entry.timestamp : "";
+
+    if (entry.type === "message" && entry.message) {
+      const msg = entry.message;
+      const role = msg.role;
+
+      if (role === "user") {
+        pushUser(extractTextFromBlocks(msg.content), ts);
+        continue;
+      }
+
+      if (role === "assistant") {
+        const content = msg.content;
+        if (Array.isArray(content)) {
+          for (const block of content) {
+            if (!block) continue;
+            if (block.type === "text" && typeof block.text === "string") {
+              pushAssistant(block.text, ts);
+            } else if (block.type === "toolCall") {
+              const name = typeof block.name === "string" ? block.name : "tool";
+              const argsText = block.arguments !== undefined ? `\n${JSON.stringify(block.arguments, null, 2)}` : "";
+              pushAssistant(`[Tool: ${name}]${argsText}`, ts, name);
+            }
+          }
+        } else {
+          pushAssistant(extractTextFromBlocks(content), ts);
+        }
+        continue;
+      }
+
+      if (role === "toolResult") {
+        const toolName = typeof msg.toolName === "string" ? msg.toolName : "tool";
+        const text = extractTextFromBlocks(msg.content) || "(no output)";
+        pushAssistant(text, ts, toolName);
+        continue;
+      }
+
+      if (role === "bashExecution") {
+        const command = typeof msg.command === "string" ? msg.command : "bash";
+        const output = typeof msg.output === "string" ? msg.output : "";
+        const body = output.trim() ? `Ran \`${command}\`\n\n${output}` : `Ran \`${command}\``;
+        pushAssistant(body, ts, "bash");
+        continue;
+      }
+
+      if (role === "custom") {
+        const customType = typeof msg.customType === "string" ? msg.customType : "custom";
+        pushAssistant(extractTextFromBlocks(msg.content), ts, customType);
+        continue;
+      }
+
+      if (role === "branchSummary" && typeof msg.summary === "string") {
+        pushAssistant(`[Branch Summary]\n${msg.summary}`, ts);
+        continue;
+      }
+
+      if (role === "compactionSummary" && typeof msg.summary === "string") {
+        pushAssistant(`[Compaction Summary]\n${msg.summary}`, ts);
+        continue;
+      }
+    }
+
+    if (entry.type === "custom_message") {
+      if (entry.display === false) continue;
+      const customType = typeof entry.customType === "string" ? entry.customType : "custom";
+      pushAssistant(extractTextFromBlocks(entry.content), ts, customType);
+      continue;
+    }
+
+    if (entry.type === "branch_summary" && typeof entry.summary === "string") {
+      pushAssistant(`[Branch Summary]\n${entry.summary}`, ts);
+      continue;
+    }
+
+    if (entry.type === "compaction" && typeof entry.summary === "string") {
+      pushAssistant(`[Compaction Summary]\n${entry.summary}`, ts);
+      continue;
+    }
+  }
+
+  return { messages, firstUserMsg };
 }
 
 // ── Session discovery (streaming) ────────────────────────────────────
@@ -193,6 +382,44 @@ async function streamCodexSessions(onSession: OnSession) {
         timestamp: timestamp || new Date(0),
         path: filePath,
         messageCount: msgCount,
+      });
+    } catch {}
+  });
+
+  await Promise.all(batch);
+}
+
+async function streamPiSessions(onSession: OnSession) {
+  const sessionsDir = join(homedir(), ".pi", "agent", "sessions");
+  if (!existsSync(sessionsDir)) return;
+
+  const paths: string[] = [];
+  await walkJsonl(sessionsDir, async (filePath) => {
+    paths.push(filePath);
+  });
+
+  const batch = paths.map(async (filePath) => {
+    try {
+      const content = await readFile(filePath, "utf-8");
+      const { header, entries } = parsePiSessionFile(content);
+      if (!header) return;
+
+      const pathEntries = buildPiPath(entries);
+      const { messages, firstUserMsg } = convertPiEntriesToMessages(pathEntries);
+      if (messages.length < 2) return;
+
+      const sessionName = getPiSessionName(pathEntries);
+      const title = (sessionName || firstUserMsg || "(untitled)").slice(0, 80);
+      const timestamp = header.timestamp ? new Date(header.timestamp) : new Date(0);
+
+      onSession({
+        id: header.id,
+        source: "pi",
+        project: header.cwd || "",
+        title,
+        timestamp: isNaN(timestamp.getTime()) ? new Date(0) : timestamp,
+        path: filePath,
+        messageCount: messages.length,
       });
     } catch {}
   });
@@ -408,9 +635,26 @@ async function parseCodexConversation(path: string): Promise<Conversation> {
   };
 }
 
+async function parsePiConversation(path: string): Promise<Conversation> {
+  const content = await readFile(path, "utf-8");
+  const { header, entries } = parsePiSessionFile(content);
+  const pathEntries = buildPiPath(entries);
+  const { messages, firstUserMsg } = convertPiEntriesToMessages(pathEntries);
+  const sessionName = getPiSessionName(pathEntries);
+
+  return {
+    title: sessionName || firstUserMsg || "Pi Session",
+    source: "Pi Coding Agent",
+    project: header?.cwd || "",
+    timestamp: header?.timestamp || "",
+    messages,
+  };
+}
+
 async function parseSession(session: Session): Promise<Conversation> {
   if (session.source === "claude") return parseClaudeConversation(session.path);
   if (session.source === "opencode") return parseOpencodeConversation(session.path);
+  if (session.source === "pi") return parsePiConversation(session.path);
   return parseCodexConversation(session.path);
 }
 
@@ -518,6 +762,10 @@ async function getSessionRaw(session: Session): Promise<string> {
   if (session.source === "opencode") {
     // Export opencode session as JSON for sharing
     const conv = await parseOpencodeConversation(session.path);
+    return JSON.stringify(conv);
+  }
+  if (session.source === "pi") {
+    const conv = await parsePiConversation(session.path);
     return JSON.stringify(conv);
   }
   return await readFile(session.path, "utf-8");
@@ -696,7 +944,13 @@ function render(state: TuiState) {
     const idx = state.scroll + i;
     const selected = idx === state.cursor;
 
-    const srcColor = session.source === "claude" ? ansi.fg(141) : session.source === "opencode" ? ansi.fg(214) : ansi.fg(71);
+    const srcColor = session.source === "claude"
+      ? ansi.fg(141)
+      : session.source === "opencode"
+        ? ansi.fg(214)
+        : session.source === "pi"
+          ? ansi.fg(81)
+          : ansi.fg(71);
     const project = session.project.split("/").pop() || session.project;
     const shortId = session.id.slice(0, 8);
     const date = session.timestamp.getTime() > 0
@@ -836,6 +1090,7 @@ async function runTui() {
     streamClaudeSessions(onSession),
     streamCodexSessions(onSession),
     streamOpencodeSessions(onSession),
+    streamPiSessions(onSession),
   ]).then(() => {
     clearInterval(flushInterval);
     // Final flush

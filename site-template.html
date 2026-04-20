@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>opentraces — browse, export & share Claude Code sessions</title>
-<meta name="description" content="A terminal UI to browse, export, and share your Claude Code & Codex sessions. End-to-end encrypted sharing via GitHub gists.">
+<title>opentraces — browse, export & share AI coding sessions</title>
+<meta name="description" content="A terminal UI to browse, export, and share your Claude Code, Codex, OpenCode, and Pi Coding Agent sessions. End-to-end encrypted sharing via GitHub gists.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="{{PUBLIC_URL}}">
 <meta property="og:title" content="opentraces">
-<meta property="og:description" content="Browse, export & share your Claude Code sessions. Fuzzy search, encrypted sharing, vim keybindings.">
+<meta property="og:description" content="Browse, export & share your Claude Code, Codex, OpenCode, and Pi Coding Agent sessions. Fuzzy search, encrypted sharing, vim keybindings.">
 <meta property="og:image" content="{{PUBLIC_URL}}/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
@@ -18,7 +18,7 @@
 <!-- Twitter -->
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="opentraces">
-<meta name="twitter:description" content="Browse, export & share your Claude Code sessions. Fuzzy search, encrypted sharing, vim keybindings.">
+<meta name="twitter:description" content="Browse, export & share your Claude Code, Codex, OpenCode, and Pi Coding Agent sessions. Fuzzy search, encrypted sharing, vim keybindings.">
 <meta name="twitter:image" content="{{PUBLIC_URL}}/og.png">
 
 <style>
@@ -103,7 +103,7 @@
 <div class="state active landing-page" id="landing">
   <div class="landing-hero">
     <div class="landing-title">opentraces</div>
-    <div class="landing-sub">browse, export & share your Claude Code, Codex & OpenCode sessions</div>
+    <div class="landing-sub">browse, export & share your Claude Code, Codex, OpenCode & Pi Coding Agent sessions</div>
     <div class="landing-install">
       <div class="landing-cmd" id="install-cmd" title="Click to copy">
         <span class="landing-copied" id="copy-toast">copied!</span>
@@ -213,6 +213,7 @@ document.getElementById('install-cmd').addEventListener('click',function(){
       try { v = JSON.parse(line); } catch(e) { continue; }
       if (isClaudeFormat(v)) parseClaudeLine(v, messages, meta);
       else if (isCodexFormat(v)) parseCodexLine(v, messages, meta);
+      else if (isPiFormat(v)) parsePiLine(v, messages, meta);
     }
   }
 
@@ -285,6 +286,13 @@ document.getElementById('install-cmd').addEventListener('click',function(){
            v.type === 'event_msg' || v.type === 'turn_context';
   }
 
+  function isPiFormat(v) {
+    return v.type === 'session' || v.type === 'message' || v.type === 'custom_message' ||
+           v.type === 'compaction' || v.type === 'branch_summary' || v.type === 'session_info' ||
+           v.type === 'model_change' || v.type === 'thinking_level_change' || v.type === 'custom' ||
+           v.type === 'label';
+  }
+
   function parseClaudeLine(v, msgs, meta) {
     if (!meta.timestamp && v.timestamp) meta.timestamp = v.timestamp;
     if (!meta.project && v.cwd) meta.project = v.cwd;
@@ -327,6 +335,106 @@ document.getElementById('install-cmd').addEventListener('click',function(){
           if (item.text && item.text.trim()) msgs.push({ role: 'assistant', content: item.text, timestamp: ts });
         }
       }
+    }
+  }
+
+  function parsePiLine(v, msgs, meta) {
+    if (!meta.source) meta.source = 'Pi Coding Agent';
+
+    if (v.type === 'session') {
+      if (!meta.timestamp && v.timestamp) meta.timestamp = v.timestamp;
+      if (!meta.project && v.cwd) meta.project = v.cwd;
+      return;
+    }
+
+    var ts = v.timestamp || '';
+
+    if (v.type === 'session_info' && typeof v.name === 'string' && v.name.trim()) {
+      meta.title = v.name.trim();
+      return;
+    }
+
+    if (v.type === 'custom_message') {
+      if (v.display === false) return;
+      var customText = extractContent(v.content);
+      if (customText.trim()) {
+        msgs.push({ role: 'assistant', content: customText, timestamp: ts, toolName: v.customType || 'custom' });
+      }
+      return;
+    }
+
+    if (v.type === 'branch_summary' && typeof v.summary === 'string' && v.summary.trim()) {
+      msgs.push({ role: 'assistant', content: '[Branch Summary]\n' + v.summary, timestamp: ts });
+      return;
+    }
+
+    if (v.type === 'compaction' && typeof v.summary === 'string' && v.summary.trim()) {
+      msgs.push({ role: 'assistant', content: '[Compaction Summary]\n' + v.summary, timestamp: ts });
+      return;
+    }
+
+    if (v.type !== 'message' || !v.message) return;
+
+    var msg = v.message;
+    var role = msg.role;
+
+    if (role === 'user') {
+      var userText = extractContent(msg.content);
+      if (!meta.title && userText.trim()) meta.title = userText.trim().slice(0, 80);
+      if (userText.trim()) msgs.push({ role: 'user', content: userText, timestamp: ts });
+      return;
+    }
+
+    if (role === 'assistant') {
+      var content = msg.content;
+      if (Array.isArray(content)) {
+        for (var j = 0; j < content.length; j++) {
+          var block = content[j];
+          if (!block) continue;
+          if (block.type === 'text' && block.text && block.text.trim()) {
+            msgs.push({ role: 'assistant', content: block.text, timestamp: ts });
+          } else if (block.type === 'toolCall') {
+            var name = block.name || 'tool';
+            var argsText = block.arguments !== undefined ? '\n' + JSON.stringify(block.arguments, null, 2) : '';
+            msgs.push({ role: 'assistant', content: '[Tool: ' + name + ']' + argsText, timestamp: ts, toolName: name });
+          }
+        }
+      } else {
+        var assistantText = extractContent(content);
+        if (assistantText.trim()) msgs.push({ role: 'assistant', content: assistantText, timestamp: ts });
+      }
+      return;
+    }
+
+    if (role === 'toolResult') {
+      var toolText = extractContent(msg.content) || '(no output)';
+      msgs.push({ role: 'assistant', content: toolText, timestamp: ts, toolName: msg.toolName || 'tool' });
+      return;
+    }
+
+    if (role === 'bashExecution') {
+      var command = msg.command || 'bash';
+      var output = msg.output || '';
+      var body = output.trim() ? 'Ran `' + command + '`\n\n' + output : 'Ran `' + command + '`';
+      msgs.push({ role: 'assistant', content: body, timestamp: ts, toolName: 'bash' });
+      return;
+    }
+
+    if (role === 'custom') {
+      var customRoleText = extractContent(msg.content);
+      if (customRoleText.trim()) {
+        msgs.push({ role: 'assistant', content: customRoleText, timestamp: ts, toolName: msg.customType || 'custom' });
+      }
+      return;
+    }
+
+    if (role === 'branchSummary' && typeof msg.summary === 'string' && msg.summary.trim()) {
+      msgs.push({ role: 'assistant', content: '[Branch Summary]\n' + msg.summary, timestamp: ts });
+      return;
+    }
+
+    if (role === 'compactionSummary' && typeof msg.summary === 'string' && msg.summary.trim()) {
+      msgs.push({ role: 'assistant', content: '[Compaction Summary]\n' + msg.summary, timestamp: ts });
     }
   }
 
