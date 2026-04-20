@@ -8,6 +8,12 @@ terminal UI for browsing and sharing your Claude Code, Codex, and OpenCode sessi
 npx opentraces
 ```
 
+serve browser viewer on Node:
+
+```
+npm start
+```
+
 ## what it does
 
 - finds all your local Claude Code, Codex, and OpenCode sessions
@@ -23,11 +29,24 @@ npx opentraces
 
 ## sharing
 
-when you press `s`, the session gets compressed, encrypted with a random key, and uploaded as a GitHub gist. the private URL (with the key in the fragment) is copied to your clipboard. the key never hits any server — decryption happens entirely in the browser at [opentraces.pages.dev](https://opentraces.pages.dev).
+when you press `s`, the session gets compressed, encrypted with a random key, and uploaded as a GitHub gist. the private URL (with the key in the fragment) is copied to your clipboard. the key never hits any server — decryption happens entirely in the browser at `OPENTRACES_PUBLIC_URL` or `http://localhost:3000`.
+
+set `OPENTRACES_PUBLIC_URL` to match whatever host serves `npm start`.
 
 you can also press `c` to copy just the public URL without the key, and send the key separately.
 
 ## requirements
 
-- [bun](https://bun.sh) or node 18+
+- node 22.5+
+- npm
 - `gh` CLI (for sharing via gists)
+
+## development
+
+```
+npm run dev
+```
+
+```
+npm run dev:site
+```
