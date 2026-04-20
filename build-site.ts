@@ -32,7 +32,7 @@ const shell = `<button id="hamburger" title="Open sidebar">&#9776;</button>
   <main id="content">
     <div class="page-header" id="page-header"></div>
     <div class="thread" id="thread"></div>
-    <footer>share.clanker.monster</footer>
+    <footer>opentraces.pages.dev</footer>
   </main>
 </div>`;
 

@@ -1,11 +1,11 @@
-![clanker-share](https://share.clanker.monster/og.png)
+![opentraces](https://opentraces.pages.dev/og.png)
 
-# clanker-share
+# opentraces
 
 terminal UI for browsing and sharing your Claude Code, Codex, and OpenCode sessions.
 
 ```
-npx clanker-share
+npx opentraces
 ```
 
 ## what it does
@@ -23,7 +23,7 @@ npx clanker-share
 
 ## sharing
 
-when you press `s`, the session gets compressed, encrypted with a random key, and uploaded as a GitHub gist. the private URL (with the key in the fragment) is copied to your clipboard. the key never hits any server — decryption happens entirely in the browser at [share.clanker.monster](https://share.clanker.monster).
+when you press `s`, the session gets compressed, encrypted with a random key, and uploaded as a GitHub gist. the private URL (with the key in the fragment) is copied to your clipboard. the key never hits any server — decryption happens entirely in the browser at [opentraces.pages.dev](https://opentraces.pages.dev).
 
 you can also press `c` to copy just the public URL without the key, and send the key separately.
 

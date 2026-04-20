@@ -456,7 +456,7 @@ function getAppShell(): string {
   <main id="content">
     <div class="page-header" id="page-header"></div>
     <div class="thread" id="thread"></div>
-    <footer>clanker-share</footer>
+    <footer>opentraces</footer>
   </main>
 </div>`;
 }
@@ -474,8 +474,8 @@ function getViewerScript(): string {
 const shareCache = new Map<string, ShareResult>();
 
 interface ShareResult {
-  publicUrl: string;  // share.clanker.monster/#<gist-id> (needs key separately)
-  privateUrl: string; // share.clanker.monster/#<gist-id>.<key>
+  publicUrl: string;  // opentraces.pages.dev/#<gist-id> (needs key separately)
+  privateUrl: string; // opentraces.pages.dev/#<gist-id>.<key>
   key: string;        // base64url key
 }
 
@@ -506,7 +506,7 @@ async function generateShareUrl(session: Session): Promise<ShareResult> {
   const packed = Buffer.concat([iv, encrypted, authTag]);
 
   // Upload to GitHub gist
-  const tmpFile = join(tmpdir(), `clanker-share-${Date.now()}.bin`);
+  const tmpFile = join(tmpdir(), `opentraces-${Date.now()}.bin`);
   await Bun.write(tmpFile, packed.toString("base64"));
 
   const proc = Bun.spawn(["gh", "gist", "create", "--public=false", tmpFile], {
@@ -528,7 +528,7 @@ async function generateShareUrl(session: Session): Promise<ShareResult> {
   if (!gistId) throw new Error(`couldn't parse gist ID from: ${gistUrl}`);
 
   const keyB64 = key.toString("base64url");
-  const base = `https://share.clanker.monster/#${gistId}`;
+  const base = `https://opentraces.pages.dev/#${gistId}`;
 
   return {
     publicUrl: base,
@@ -639,7 +639,7 @@ function render(state: TuiState) {
 
   // Header
   write(ansi.moveTo(1, 1));
-  write(`${ansi.bold}${ansi.fg(255)} clanker-share${ansi.reset}`);
+  write(`${ansi.bold}${ansi.fg(255)} opentraces${ansi.reset}`);
   write(`${ansi.dim}${ansi.fg(240)}  ${state.filtered.length} sessions${ansi.reset}`);
 
   // Column headers
@@ -922,7 +922,7 @@ async function runTui() {
         const html = generateHtml(conv);
         const tmp = join(
           tmpdir(),
-          `clanker-${session.id.slice(0, 8)}.html`
+          `opentraces-${session.id.slice(0, 8)}.html`
         );
         await Bun.write(tmp, html);
         await openInBrowser(tmp);

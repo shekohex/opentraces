@@ -1,11 +1,11 @@
 {
-  "name": "clanker-share",
+  "name": "opentraces",
   "version": "0.2.0",
   "description": "Browse, export & share Claude Code, Codex & OpenCode sessions",
   "module": "index.ts",
   "type": "module",
   "bin": {
-    "clanker-share": "./bin.mjs"
+    "opentraces": "./bin.mjs"
   },
   "files": [
     "bin.mjs",
@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "build:site": "bun run build-site.ts",
-    "deploy": "bun run build:site && bunx wrangler pages deploy site --project-name clanker-share --commit-dirty=true"
+    "deploy": "bun run build:site && bunx wrangler pages deploy site --project-name opentraces --commit-dirty=true"
   },
   "keywords": [
     "claude",

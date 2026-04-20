@@ -3,23 +3,23 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>clanker-share — browse, export & share Claude Code sessions</title>
+<title>opentraces — browse, export & share Claude Code sessions</title>
 <meta name="description" content="A terminal UI to browse, export, and share your Claude Code & Codex sessions. End-to-end encrypted sharing via GitHub gists.">
 
 <!-- Open Graph -->
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://share.clanker.monster">
-<meta property="og:title" content="clanker-share">
+<meta property="og:url" content="https://opentraces.pages.dev">
+<meta property="og:title" content="opentraces">
 <meta property="og:description" content="Browse, export & share your Claude Code sessions. Fuzzy search, encrypted sharing, vim keybindings.">
-<meta property="og:image" content="https://share.clanker.monster/og.png">
+<meta property="og:image" content="https://opentraces.pages.dev/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 
 <!-- Twitter -->
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="clanker-share">
+<meta name="twitter:title" content="opentraces">
 <meta name="twitter:description" content="Browse, export & share your Claude Code sessions. Fuzzy search, encrypted sharing, vim keybindings.">
-<meta name="twitter:image" content="https://share.clanker.monster/og.png">
+<meta name="twitter:image" content="https://opentraces.pages.dev/og.png">
 
 <style>
 @font-face{font-family:'Berkeley Mono';font-weight:400;font-style:normal;src:url('/BerkeleyMono-Regular.otf') format('opentype')}
@@ -102,16 +102,16 @@
 
 <div class="state active landing-page" id="landing">
   <div class="landing-hero">
-    <div class="landing-title">clanker-share</div>
+    <div class="landing-title">opentraces</div>
     <div class="landing-sub">browse, export & share your Claude Code, Codex & OpenCode sessions</div>
     <div class="landing-install">
       <div class="landing-cmd" id="install-cmd" title="Click to copy">
         <span class="landing-copied" id="copy-toast">copied!</span>
-        <span class="prompt">$ </span>npx clanker-share
+        <span class="prompt">$ </span>npx opentraces
       </div>
     </div>
     <div class="landing-or">or</div>
-    <div class="landing-alt"><code>bunx clanker-share</code></div>
+    <div class="landing-alt"><code>bunx opentraces</code></div>
     <div class="landing-features">
       <div class="landing-feat">
         <span class="landing-feat-icon">&bull;</span>
@@ -139,13 +139,13 @@
       </div>
     </div>
     <div class="landing-footer">
-      <a href="https://github.com/dnakov/clanker-share">github</a>
+      <a href="https://github.com/shekohex/opentraces">github</a>
     </div>
   </div>
 </div>
 <script>
 document.getElementById('install-cmd').addEventListener('click',function(){
-  navigator.clipboard.writeText('npx clanker-share').then(function(){
+  navigator.clipboard.writeText('npx opentraces').then(function(){
     var t=document.getElementById('copy-toast');t.classList.add('show');
     setTimeout(function(){t.classList.remove('show')},1500);
   });
